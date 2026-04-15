@@ -121,6 +121,20 @@ export interface Comment {
   updated_at: string;
 }
 
+export interface Label {
+  id: number;
+  name: string;
+  color: string;
+  description?: string;
+}
+
+export interface GiteaUser {
+  id: number;
+  login: string;
+  full_name: string;
+  avatar_url: string;
+}
+
 export class GiteaService {
   private config: GiteaConfig;
 
@@ -216,5 +230,33 @@ export class GiteaService {
 
   async createIssueComment(owner: string, repo: string, index: number, body: string) {
     return this.request('POST', `/repos/${owner}/${repo}/issues/${index}/comments`, { body }) as Promise<Comment>;
+  }
+
+  async updateIssueComment(owner: string, repo: string, id: number, body: string) {
+    return this.request('PATCH', `/repos/${owner}/${repo}/issues/comments/${id}`, { body }) as Promise<Comment>;
+  }
+
+  async deleteIssueComment(owner: string, repo: string, id: number) {
+    return this.request('DELETE', `/repos/${owner}/${repo}/issues/comments/${id}`);
+  }
+
+  async getLabels(owner: string, repo: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/labels`) as Promise<Label[]>;
+  }
+
+  async createLabel(owner: string, repo: string, data: { name: string; color: string; description?: string }) {
+    return this.request('POST', `/repos/${owner}/${repo}/labels`, data) as Promise<Label>;
+  }
+
+  async updateLabel(owner: string, repo: string, id: number, data: { name?: string; color?: string; description?: string }) {
+    return this.request('PATCH', `/repos/${owner}/${repo}/labels/${id}`, data) as Promise<Label>;
+  }
+
+  async deleteLabel(owner: string, repo: string, id: number) {
+    return this.request('DELETE', `/repos/${owner}/${repo}/labels/${id}`);
+  }
+
+  async getRepoAssignees(owner: string, repo: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/assignees`) as Promise<GiteaUser[]>;
   }
 }
