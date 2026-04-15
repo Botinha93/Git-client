@@ -6,6 +6,7 @@ interface GitGraphProps {
   commits: Commit[];
   width?: number;
   height?: number;
+  onCommitClick?: (commit: Commit) => void;
 }
 
 interface GraphNode extends d3.SimulationNodeDatum {
@@ -24,7 +25,7 @@ interface GraphLink extends d3.SimulationLinkDatum<GraphNode> {
   target: string;
 }
 
-export function GitGraph({ commits, width = 800, height = 400 }: GitGraphProps) {
+export function GitGraph({ commits, width = 800, height = 400, onCommitClick }: GitGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
@@ -81,6 +82,12 @@ export function GitGraph({ commits, width = 800, height = 400 }: GitGraphProps) 
       });
     });
 
+    const maxLane = Math.max(...nodes.map(n => n.lane), 0);
+    const dynamicWidth = Math.max(width, (maxLane + 1) * 30 + 200);
+    const dynamicHeight = Math.max(height, commits.length * 50 + 100);
+
+    svg.attr("width", dynamicWidth).attr("height", dynamicHeight);
+
     const g = svg.append("g").attr("transform", "translate(20, 20)");
 
     // Draw links
@@ -118,23 +125,30 @@ export function GitGraph({ commits, width = 800, height = 400 }: GitGraphProps) 
       .data(nodes)
       .enter()
       .append("g")
-      .attr("class", "node")
-      .attr("transform", d => `translate(${d.x}, ${d.y})`);
+      .attr("class", "node cursor-pointer group")
+      .attr("transform", d => `translate(${d.x}, ${d.y})`)
+      .on("click", (event, d) => {
+        const commit = commits.find(c => c.sha === d.sha);
+        if (commit && onCommitClick) {
+          onCommitClick(commit);
+        }
+      });
 
     nodeGroups.append("circle")
       .attr("r", 6)
       .attr("fill", d => d3.schemeCategory10[d.lane % 10])
       .attr("stroke", "#fff")
-      .attr("stroke-width", 2);
+      .attr("stroke-width", 2)
+      .attr("class", "group-hover:stroke-sky-400 group-hover:r-8 transition-all duration-200");
 
-    // Add tooltips or labels
+    // Add message labels
     nodeGroups.append("text")
       .attr("x", 12)
       .attr("y", 4)
       .text(d => d.message.split('\n')[0])
       .attr("font-size", "11px")
       .attr("fill", "#334155")
-      .attr("class", "opacity-0 hover:opacity-100 transition-opacity pointer-events-none");
+      .attr("class", "font-medium group-hover:text-sky-600 transition-colors");
 
     // Add SHA labels
     nodeGroups.append("text")
@@ -144,7 +158,8 @@ export function GitGraph({ commits, width = 800, height = 400 }: GitGraphProps) 
       .attr("font-size", "10px")
       .attr("font-family", "monospace")
       .attr("fill", "#94a3b8")
-      .attr("text-anchor", "end");
+      .attr("text-anchor", "end")
+      .attr("class", "group-hover:fill-slate-400 transition-colors");
 
   }, [commits]);
 
@@ -152,9 +167,7 @@ export function GitGraph({ commits, width = 800, height = 400 }: GitGraphProps) 
     <div className="w-full overflow-auto bg-white border border-slate-200 rounded-xl shadow-sm">
       <svg 
         ref={svgRef} 
-        width={width} 
-        height={Math.max(height, commits.length * 50 + 100)}
-        className="max-w-full"
+        className="block"
       />
     </div>
   );

@@ -82,6 +82,45 @@ export interface Commit {
   }[];
 }
 
+export interface Issue {
+  id: number;
+  number: number;
+  title: string;
+  body: string;
+  state: 'open' | 'closed';
+  user: {
+    id: number;
+    login: string;
+    avatar_url: string;
+  };
+  assignee?: {
+    id: number;
+    login: string;
+    avatar_url: string;
+  };
+  labels: {
+    id: number;
+    name: string;
+    color: string;
+  }[];
+  comments: number;
+  created_at: string;
+  updated_at: string;
+  closed_at?: string;
+}
+
+export interface Comment {
+  id: number;
+  body: string;
+  user: {
+    id: number;
+    login: string;
+    avatar_url: string;
+  };
+  created_at: string;
+  updated_at: string;
+}
+
 export class GiteaService {
   private config: GiteaConfig;
 
@@ -153,5 +192,29 @@ export class GiteaService {
     branch?: string;
   }) {
     return this.request('DELETE', `/repos/${owner}/${repo}/contents/${path}`, data);
+  }
+
+  async getIssues(owner: string, repo: string, params?: any) {
+    return this.request('GET', `/repos/${owner}/${repo}/issues`, null, params) as Promise<Issue[]>;
+  }
+
+  async getIssue(owner: string, repo: string, index: number) {
+    return this.request('GET', `/repos/${owner}/${repo}/issues/${index}`) as Promise<Issue>;
+  }
+
+  async createIssue(owner: string, repo: string, data: { title: string; body?: string; assignees?: string[]; labels?: number[] }) {
+    return this.request('POST', `/repos/${owner}/${repo}/issues`, data) as Promise<Issue>;
+  }
+
+  async updateIssue(owner: string, repo: string, index: number, data: { title?: string; body?: string; state?: 'open' | 'closed'; assignees?: string[]; labels?: number[] }) {
+    return this.request('PATCH', `/repos/${owner}/${repo}/issues/${index}`, data) as Promise<Issue>;
+  }
+
+  async getIssueComments(owner: string, repo: string, index: number) {
+    return this.request('GET', `/repos/${owner}/${repo}/issues/${index}/comments`) as Promise<Comment[]>;
+  }
+
+  async createIssueComment(owner: string, repo: string, index: number, body: string) {
+    return this.request('POST', `/repos/${owner}/${repo}/issues/${index}/comments`, { body }) as Promise<Comment>;
   }
 }

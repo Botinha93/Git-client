@@ -17,16 +17,32 @@ import {
   Save, 
   ArrowLeft,
   Layout as LayoutIcon,
-  Clock
+  Clock,
+  Search
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Input } from '@/components/ui/input';
+import { 
+  Sheet, 
+  SheetContent, 
+  SheetHeader, 
+  SheetTitle, 
+  SheetDescription 
+} from '@/components/ui/sheet';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from '@/lib/utils';
 import Editor from '@monaco-editor/react';
 import { GitGraph } from './GitGraph';
+import { IssuesView } from './IssuesView';
 
 interface RepoViewProps {
   gitea: GiteaService;
@@ -39,6 +55,9 @@ export function RepoView({ gitea }: RepoViewProps) {
   const [contents, setContents] = useState<FileContent[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
+  const [selectedCommit, setSelectedCommit] = useState<Commit | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [commitSearchQuery, setCommitSearchQuery] = useState('');
   const [currentBranch, setCurrentBranch] = useState<string>('');
   const [currentPath, setCurrentPath] = useState<string>(searchParams.get('path') || '');
   const [selectedFile, setSelectedFile] = useState<FileContent | null>(null);
@@ -59,6 +78,12 @@ export function RepoView({ gitea }: RepoViewProps) {
     }
   }, [repository, currentBranch, currentPath]);
 
+  useEffect(() => {
+    if (repository && currentBranch) {
+      loadCommits();
+    }
+  }, [repository, currentBranch]);
+
   const loadRepo = async () => {
     setLoading(true);
     try {
@@ -69,14 +94,19 @@ export function RepoView({ gitea }: RepoViewProps) {
       setRepository(repoData);
       setBranches(branchData);
       setCurrentBranch(repoData.default_branch);
-      
-      // Load commits for the default branch
-      const commitData = await gitea.getCommits(owner!, repoName!, repoData.default_branch);
-      setCommits(commitData);
     } catch (error) {
       console.error('Failed to load repo:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadCommits = async () => {
+    try {
+      const commitData = await gitea.getCommits(owner!, repoName!, currentBranch);
+      setCommits(commitData);
+    } catch (error) {
+      console.error('Failed to load commits:', error);
     }
   };
 
@@ -102,6 +132,18 @@ export function RepoView({ gitea }: RepoViewProps) {
     }
   };
 
+  const filteredContents = contents.filter(item => 
+    item.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredCommits = commits.filter(commit => {
+    const query = commitSearchQuery.toLowerCase();
+    const authorName = (commit.author?.login || commit.commit.author.name).toLowerCase();
+    const message = commit.commit.message.toLowerCase();
+    const sha = commit.sha.toLowerCase();
+    return authorName.includes(query) || message.includes(query) || sha.includes(query);
+  });
+
   const handlePathClick = (path: string, type: 'file' | 'dir') => {
     if (type === 'dir') {
       setCurrentPath(path);
@@ -117,6 +159,12 @@ export function RepoView({ gitea }: RepoViewProps) {
     const newPath = parts.join('/');
     setCurrentPath(newPath);
     setSearchParams({ path: newPath });
+  };
+
+  const handleBreadcrumbClick = (path: string) => {
+    setCurrentPath(path);
+    setSearchParams({ path });
+    setSelectedFile(null);
   };
 
   const handleSave = async () => {
@@ -199,6 +247,9 @@ export function RepoView({ gitea }: RepoViewProps) {
             <TabsTrigger value="history" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <Clock className="w-3.5 h-3.5 mr-2" /> History
             </TabsTrigger>
+            <TabsTrigger value="issues" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <MessageSquare className="w-3.5 h-3.5 mr-2" /> Issues
+            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -227,9 +278,30 @@ export function RepoView({ gitea }: RepoViewProps) {
 
               {/* Branch & Actions */}
               <div className="flex justify-between items-center">
-                <div className="px-3 py-1.5 bg-slate-200/50 border border-slate-200 rounded-lg text-xs font-bold text-slate-600 flex items-center gap-2">
-                  <GitBranch className="w-3.5 h-3.5" /> branch: {currentBranch}
-                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger render={
+                    <Button variant="outline" size="sm" className="h-9 px-3 bg-slate-200/50 border border-slate-200 rounded-lg text-xs font-bold text-slate-600 flex items-center gap-2 hover:bg-slate-200">
+                      <GitBranch className="w-3.5 h-3.5" /> 
+                      <span className="opacity-50 font-normal">branch:</span> {currentBranch}
+                    </Button>
+                  } />
+                  <DropdownMenuContent align="start" className="w-56 bg-white">
+                    <div className="px-2 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Switch Branch</div>
+                    {branches.map((branch) => (
+                      <DropdownMenuItem 
+                        key={branch.name}
+                        onClick={() => setCurrentBranch(branch.name)}
+                        className={cn(
+                          "flex items-center justify-between text-xs cursor-pointer",
+                          currentBranch === branch.name && "bg-slate-50 font-bold text-sky-600"
+                        )}
+                      >
+                        {branch.name}
+                        {currentBranch === branch.name && <Check className="w-3 h-3" />}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" className="h-8 border-slate-200 text-slate-600">Go to File</Button>
                   <Button variant="outline" size="sm" className="h-8 border-slate-200 text-slate-600">Add file</Button>
@@ -248,22 +320,47 @@ export function RepoView({ gitea }: RepoViewProps) {
                         Latest commit <span className="font-bold text-slate-600">{commits[0]?.sha.substring(0, 7)}</span> {commits[0] ? new Date(commits[0].commit.author.date).toLocaleDateString() : ''}
                       </div>
                     </div>
-                    <div className="flex items-center px-4 py-3 bg-white border-b border-slate-100">
+                    <div className="flex items-center px-4 py-3 bg-white border-b border-slate-100 gap-4">
                       {currentPath && (
-                        <Button variant="ghost" size="icon" onClick={handleBack} className="h-7 w-7 mr-2 hover:bg-slate-100">
+                        <Button variant="ghost" size="icon" onClick={handleBack} className="h-7 w-7 shrink-0 hover:bg-slate-100">
                           <ArrowLeft className="w-3.5 h-3.5" />
                         </Button>
                       )}
-                      <div className="text-xs font-medium text-slate-500">
-                        <span className="text-slate-900">{repository.name}</span>
-                        {currentPath.split('/').filter(Boolean).map((part, i) => (
-                          <span key={i}> / {part}</span>
-                        ))}
+                      <div className="text-xs font-medium text-slate-500 flex items-center gap-1 flex-1 overflow-hidden">
+                        <button 
+                          onClick={() => handleBreadcrumbClick('')}
+                          className="text-slate-900 hover:text-sky-600 hover:underline transition-colors shrink-0"
+                        >
+                          {repository.name}
+                        </button>
+                        {currentPath.split('/').filter(Boolean).map((part, i, arr) => {
+                          const path = arr.slice(0, i + 1).join('/');
+                          return (
+                            <React.Fragment key={path}>
+                              <span className="text-slate-300 shrink-0">/</span>
+                              <button 
+                                onClick={() => handleBreadcrumbClick(path)}
+                                className="hover:text-sky-600 hover:underline transition-colors truncate"
+                              >
+                                {part}
+                              </button>
+                            </React.Fragment>
+                          );
+                        })}
+                      </div>
+                      <div className="relative w-48 shrink-0">
+                        <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
+                        <Input 
+                          placeholder="Search files..." 
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="h-7 pl-7 text-[10px] bg-slate-50 border-slate-200 focus-visible:ring-sky-400"
+                        />
                       </div>
                     </div>
                     <table className="w-full">
                       <tbody>
-                        {contents.map((item) => (
+                        {filteredContents.map((item) => (
                           <tr 
                             key={item.path} 
                             onClick={() => handlePathClick(item.path, item.type)}
@@ -293,10 +390,30 @@ export function RepoView({ gitea }: RepoViewProps) {
                         <Button variant="ghost" size="icon" onClick={() => setSelectedFile(null)} className="h-8 w-8 hover:bg-slate-100">
                           <ArrowLeft className="w-4 h-4" />
                         </Button>
-                        <div className="text-xs font-medium">
-                          <span className="text-slate-400">{selectedFile.path.split('/').slice(0, -1).join('/')} /</span>
-                          <span className="text-slate-900 font-bold"> {selectedFile.name}</span>
-                        </div>
+                    <div className="text-xs font-medium text-slate-500 flex items-center gap-1">
+                      <button 
+                        onClick={() => handleBreadcrumbClick('')}
+                        className="hover:text-sky-600 hover:underline transition-colors"
+                      >
+                        {repository.name}
+                      </button>
+                      {selectedFile.path.split('/').slice(0, -1).map((part, i, arr) => {
+                        const path = arr.slice(0, i + 1).join('/');
+                        return (
+                          <React.Fragment key={path}>
+                            <span className="text-slate-300">/</span>
+                            <button 
+                              onClick={() => handleBreadcrumbClick(path)}
+                              className="hover:text-sky-600 hover:underline transition-colors"
+                            >
+                              {part}
+                            </button>
+                          </React.Fragment>
+                        );
+                      })}
+                      <span className="text-slate-300">/</span>
+                      <span className="text-slate-900 font-bold"> {selectedFile.name}</span>
+                    </div>
                       </div>
                       <Button 
                         onClick={handleSave}
@@ -347,13 +464,24 @@ export function RepoView({ gitea }: RepoViewProps) {
           <ScrollArea className="flex-1">
             <div className="p-8 max-w-6xl mx-auto space-y-6">
               <div className="flex items-center justify-between">
-                <h2 className="text-xl font-bold text-slate-900">Commit History</h2>
-                <div className="text-xs text-slate-500 font-mono">
-                  Showing {commits.length} commits
+                <div className="space-y-1">
+                  <h2 className="text-xl font-bold text-slate-900">Commit History</h2>
+                  <div className="text-xs text-slate-500 font-mono">
+                    Showing {filteredCommits.length} of {commits.length} commits
+                  </div>
+                </div>
+                <div className="relative w-64">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <Input 
+                    placeholder="Search commits by author, message, or SHA..." 
+                    value={commitSearchQuery}
+                    onChange={(e) => setCommitSearchQuery(e.target.value)}
+                    className="h-9 pl-9 text-xs bg-white border-slate-200 focus-visible:ring-sky-400 shadow-sm"
+                  />
                 </div>
               </div>
               
-              <GitGraph commits={commits} />
+              <GitGraph commits={filteredCommits} onCommitClick={setSelectedCommit} />
 
               <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
                 <table className="w-full">
@@ -366,8 +494,12 @@ export function RepoView({ gitea }: RepoViewProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {commits.map((commit) => (
-                      <tr key={commit.sha} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                    {filteredCommits.map((commit) => (
+                      <tr 
+                        key={commit.sha} 
+                        onClick={() => setSelectedCommit(commit)}
+                        className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors cursor-pointer"
+                      >
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <img src={commit.author?.avatar_url} className="w-5 h-5 rounded-full" alt="" />
@@ -391,7 +523,67 @@ export function RepoView({ gitea }: RepoViewProps) {
             </div>
           </ScrollArea>
         </TabsContent>
+
+        <TabsContent value="issues" className="flex-1 flex flex-col overflow-hidden m-0">
+          {owner && repoName && (
+            <IssuesView gitea={gitea} owner={owner} repo={repoName} />
+          )}
+        </TabsContent>
       </Tabs>
+
+      {/* Commit Detail Sheet */}
+      <Sheet open={!!selectedCommit} onOpenChange={(open) => !open && setSelectedCommit(null)}>
+        <SheetContent className="sm:max-w-md bg-white">
+          <SheetHeader className="border-b border-slate-100 pb-4">
+            <SheetTitle className="text-lg font-bold text-slate-900">Commit Details</SheetTitle>
+            <SheetDescription className="text-xs font-mono text-slate-500">
+              {selectedCommit?.sha}
+            </SheetDescription>
+          </SheetHeader>
+          
+          {selectedCommit && (
+            <div className="py-6 space-y-6">
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <img src={selectedCommit.author?.avatar_url} className="w-10 h-10 rounded-full border border-slate-200" alt="" />
+                  <div>
+                    <div className="text-sm font-bold text-slate-900">{selectedCommit.author?.login || selectedCommit.commit.author.name}</div>
+                    <div className="text-xs text-slate-500">{selectedCommit.commit.author.email}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <Clock className="w-3.5 h-3.5" />
+                  {new Date(selectedCommit.commit.author.date).toLocaleString()}
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-100">
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Message</div>
+                <div className="text-sm text-slate-700 whitespace-pre-wrap font-medium leading-relaxed">
+                  {selectedCommit.commit.message}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Parents</div>
+                <div className="space-y-2">
+                  {selectedCommit.parents.map(parent => (
+                    <div key={parent.sha} className="flex items-center justify-between p-2 bg-white border border-slate-200 rounded-md">
+                      <code className="text-[10px] font-mono text-slate-600">{parent.sha.substring(0, 10)}...</code>
+                      <Button variant="ghost" size="sm" className="h-7 text-[10px] uppercase font-bold text-sky-600 hover:text-sky-700 hover:bg-sky-50">
+                        View Parent
+                      </Button>
+                    </div>
+                  ))}
+                  {selectedCommit.parents.length === 0 && (
+                    <div className="text-xs text-slate-400 italic">No parent commits (Initial commit)</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
