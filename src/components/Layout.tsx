@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Repository } from '@/src/lib/gitea';
 import { 
   Book, 
   ChevronRight, 
+  Compass,
   Folder, 
   GitBranch, 
   History, 
@@ -14,7 +16,8 @@ import {
   LogOut, 
   Search, 
   Settings, 
-  Star 
+  Star,
+  UserCircle
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -27,6 +30,14 @@ interface LayoutProps {
 
 export function Layout({ children, repositories, onLogout, user }: LayoutProps) {
   const location = useLocation();
+  const [repoSearch, setRepoSearch] = useState('');
+  const filteredRepositories = useMemo(() => {
+    const query = repoSearch.toLowerCase();
+    return repositories.filter((repo) => {
+      const haystack = [repo.name, repo.full_name, repo.description, repo.owner.login].join(' ').toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [repositories, repoSearch]);
 
   return (
     <div className="flex h-screen bg-slate-100 text-slate-700 font-sans">
@@ -38,11 +49,60 @@ export function Layout({ children, repositories, onLogout, user }: LayoutProps) 
         </div>
 
         <nav className="mt-5 flex-1 overflow-y-auto">
+          <div className="space-y-0.5 mb-6">
+            <Link
+              to="/"
+              className={cn(
+                "flex items-center gap-3 px-6 py-3 text-sm transition-colors relative",
+                location.pathname === '/'
+                  ? "bg-slate-700 text-slate-50 border-l-4 border-sky-400"
+                  : "hover:bg-slate-800 hover:text-slate-50"
+              )}
+            >
+              <Book className="w-4 h-4 opacity-70" />
+              <span>Dashboard</span>
+            </Link>
+            <Link
+              to="/explore"
+              className={cn(
+                "flex items-center gap-3 px-6 py-3 text-sm transition-colors relative",
+                location.pathname === '/explore'
+                  ? "bg-slate-700 text-slate-50 border-l-4 border-sky-400"
+                  : "hover:bg-slate-800 hover:text-slate-50"
+              )}
+            >
+              <Compass className="w-4 h-4 opacity-70" />
+              <span>Explore</span>
+            </Link>
+            <Link
+              to="/account"
+              className={cn(
+                "flex items-center gap-3 px-6 py-3 text-sm transition-colors relative",
+                location.pathname === '/account'
+                  ? "bg-slate-700 text-slate-50 border-l-4 border-sky-400"
+                  : "hover:bg-slate-800 hover:text-slate-50"
+              )}
+            >
+              <UserCircle className="w-4 h-4 opacity-70" />
+              <span>Account</span>
+            </Link>
+          </div>
           <div className="px-6 mb-2 text-[10px] uppercase tracking-widest opacity-50 font-semibold">
             Repositories
           </div>
+          <div className="px-4 mb-3">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+              <Input
+                value={repoSearch}
+                onChange={(event) => setRepoSearch(event.target.value)}
+                placeholder="Search repos..."
+                className="h-8 pl-8 bg-slate-800 border-slate-700 text-xs text-slate-100 placeholder:text-slate-500 focus-visible:ring-sky-400"
+              />
+            </div>
+          </div>
           <div className="space-y-0.5">
-            {repositories.map((repo) => {
+            {filteredRepositories.map((repo) => {
               const isActive = location.pathname.includes(`/repo/${repo.owner.login}/${repo.name}`);
               return (
                 <Link
@@ -60,6 +120,9 @@ export function Layout({ children, repositories, onLogout, user }: LayoutProps) 
                 </Link>
               );
             })}
+            {filteredRepositories.length === 0 && (
+              <div className="px-6 py-6 text-xs text-slate-500">No repositories found</div>
+            )}
           </div>
         </nav>
 

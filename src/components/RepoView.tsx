@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
-import { GiteaService, Repository, FileContent, Branch, Commit } from '@/src/lib/gitea';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { GiteaService, Repository, FileContent, Branch, Commit, GitTreeItem, CommitStatus, CommitStatusState } from '@/src/lib/gitea';
 import { 
+  Activity,
   File, 
   Folder, 
   ChevronRight, 
   GitBranch, 
+  GitFork,
   History as HistoryIcon, 
   MessageSquare, 
   GitPullRequest, 
@@ -18,7 +20,14 @@ import {
   ArrowLeft,
   Layout as LayoutIcon,
   Clock,
-  Search
+  Search,
+  Package,
+  Trash2,
+  Settings,
+  BookOpen,
+  Tag,
+  ExternalLink,
+  XCircle
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -26,6 +35,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { 
   Sheet, 
   SheetContent, 
@@ -41,21 +57,67 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from '@/lib/utils';
 import Editor from '@monaco-editor/react';
+import ReactMarkdown from 'react-markdown';
 import { GitGraph } from './GitGraph';
 import { IssuesView } from './IssuesView';
+import { PullRequestsView } from './PullRequestsView';
+import { ReleasesView } from './ReleasesView';
+import { RepositorySettingsView } from './RepositorySettingsView';
+import { WikiView } from './WikiView';
+import { TagsView } from './TagsView';
+import { RepositoryInsightsView } from './RepositoryInsightsView';
 
 interface RepoViewProps {
   gitea: GiteaService;
 }
 
+function encodeBase64(content: string) {
+  const bytes = new TextEncoder().encode(content);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function decodeBase64(content: string) {
+  const binary = atob(content.replace(/\s/g, ''));
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+const statusLabels: Record<CommitStatusState, string> = {
+  pending: 'Pending',
+  success: 'Success',
+  error: 'Error',
+  failure: 'Failure',
+  warning: 'Warning',
+};
+
+const statusClasses: Record<CommitStatusState, string> = {
+  pending: 'bg-amber-50 text-amber-700 border-amber-100',
+  success: 'bg-green-50 text-green-700 border-green-100',
+  error: 'bg-red-50 text-red-700 border-red-100',
+  failure: 'bg-red-50 text-red-700 border-red-100',
+  warning: 'bg-orange-50 text-orange-700 border-orange-100',
+};
+
 export function RepoView({ gitea }: RepoViewProps) {
   const { owner, repo: repoName } = useParams();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [repository, setRepository] = useState<Repository | null>(null);
   const [contents, setContents] = useState<FileContent[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [forks, setForks] = useState<Repository[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [selectedCommit, setSelectedCommit] = useState<Commit | null>(null);
+  const [commitStatuses, setCommitStatuses] = useState<CommitStatus[]>([]);
+  const [loadingStatuses, setLoadingStatuses] = useState(false);
+  const [newStatusState, setNewStatusState] = useState<CommitStatusState>('success');
+  const [newStatusContext, setNewStatusContext] = useState('manual/check');
+  const [newStatusDescription, setNewStatusDescription] = useState('');
+  const [newStatusTargetUrl, setNewStatusTargetUrl] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [commitSearchQuery, setCommitSearchQuery] = useState('');
   const [currentBranch, setCurrentBranch] = useState<string>('');
@@ -65,6 +127,23 @@ export function RepoView({ gitea }: RepoViewProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isCreateFileOpen, setIsCreateFileOpen] = useState(false);
+  const [isGoToFileOpen, setIsGoToFileOpen] = useState(false);
+  const [isForkDialogOpen, setIsForkDialogOpen] = useState(false);
+  const [newFileName, setNewFileName] = useState('');
+  const [newFileContent, setNewFileContent] = useState('');
+  const [newFileMessage, setNewFileMessage] = useState('');
+  const [commitMessage, setCommitMessage] = useState('');
+  const [readmeName, setReadmeName] = useState('');
+  const [readmeContent, setReadmeContent] = useState('');
+  const [repoTree, setRepoTree] = useState<GitTreeItem[]>([]);
+  const [goToFileQuery, setGoToFileQuery] = useState('');
+  const [loadingTree, setLoadingTree] = useState(false);
+  const [isStarred, setIsStarred] = useState(false);
+  const [isWatching, setIsWatching] = useState(false);
+  const [engagementSaving, setEngagementSaving] = useState<'star' | 'watch' | null>(null);
+  const [forkOrganization, setForkOrganization] = useState('');
+  const [forkName, setForkName] = useState('');
 
   useEffect(() => {
     if (owner && repoName) {
@@ -81,8 +160,17 @@ export function RepoView({ gitea }: RepoViewProps) {
   useEffect(() => {
     if (repository && currentBranch) {
       loadCommits();
+      loadReadme();
     }
   }, [repository, currentBranch]);
+
+  useEffect(() => {
+    if (selectedCommit) {
+      loadCommitStatuses(selectedCommit.sha);
+    } else {
+      setCommitStatuses([]);
+    }
+  }, [selectedCommit]);
 
   const loadRepo = async () => {
     setLoading(true);
@@ -94,10 +182,33 @@ export function RepoView({ gitea }: RepoViewProps) {
       setRepository(repoData);
       setBranches(branchData);
       setCurrentBranch(repoData.default_branch);
+      loadEngagementState();
+      loadForks();
     } catch (error) {
       console.error('Failed to load repo:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadEngagementState = async () => {
+    if (!owner || !repoName) return;
+    const [starredResult, watchingResult] = await Promise.allSettled([
+      gitea.isStarred(owner, repoName),
+      gitea.isWatching(owner, repoName),
+    ]);
+    if (starredResult.status === 'fulfilled') setIsStarred(starredResult.value);
+    if (watchingResult.status === 'fulfilled') setIsWatching(watchingResult.value);
+  };
+
+  const loadForks = async () => {
+    if (!owner || !repoName) return;
+    try {
+      const data = await gitea.getRepositoryForks(owner, repoName);
+      setForks(data);
+    } catch (error) {
+      console.error('Failed to load repository forks:', error);
+      setForks([]);
     }
   };
 
@@ -110,6 +221,20 @@ export function RepoView({ gitea }: RepoViewProps) {
     }
   };
 
+  const loadCommitStatuses = async (sha: string) => {
+    if (!owner || !repoName) return;
+    setLoadingStatuses(true);
+    try {
+      const statuses = await gitea.getCommitStatuses(owner, repoName, sha);
+      setCommitStatuses(statuses);
+    } catch (error) {
+      console.error('Failed to load commit statuses:', error);
+      setCommitStatuses([]);
+    } finally {
+      setLoadingStatuses(false);
+    }
+  };
+
   const loadContents = async (path: string) => {
     try {
       const data = await gitea.getContents(owner!, repoName!, path, currentBranch);
@@ -119,8 +244,9 @@ export function RepoView({ gitea }: RepoViewProps) {
       } else {
         // It's a file
         setSelectedFile(data);
+        setCommitMessage(`Update ${data.name}`);
         if (data.content) {
-          setFileContent(atob(data.content));
+          setFileContent(decodeBase64(data.content));
         } else if (data.download_url) {
           const res = await fetch(data.download_url);
           const text = await res.text();
@@ -130,6 +256,34 @@ export function RepoView({ gitea }: RepoViewProps) {
     } catch (error) {
       console.error('Failed to load contents:', error);
     }
+  };
+
+  const loadReadme = async () => {
+    if (!owner || !repoName) return;
+    const candidates = ['README.md', 'README.MD', 'Readme.md', 'README'];
+    for (const candidate of candidates) {
+      try {
+        const data = await gitea.getContents(owner, repoName, candidate, currentBranch);
+        if (!Array.isArray(data) && data.type === 'file') {
+          setReadmeName(data.name);
+          if (data.content) {
+            setReadmeContent(decodeBase64(data.content));
+          } else if (data.download_url) {
+            const response = await fetch(data.download_url);
+            setReadmeContent(await response.text());
+          } else {
+            setReadmeContent('');
+          }
+          return;
+        }
+      } catch (error: any) {
+        if (error.response?.status !== 404) {
+          console.error('Failed to load README:', error);
+        }
+      }
+    }
+    setReadmeName('');
+    setReadmeContent('');
   };
 
   const filteredContents = contents.filter(item => 
@@ -143,6 +297,11 @@ export function RepoView({ gitea }: RepoViewProps) {
     const sha = commit.sha.toLowerCase();
     return authorName.includes(query) || message.includes(query) || sha.includes(query);
   });
+
+  const filteredRepoFiles = repoTree
+    .filter(item => item.type === 'blob')
+    .filter(item => item.path.toLowerCase().includes(goToFileQuery.toLowerCase()))
+    .slice(0, 80);
 
   const handlePathClick = (path: string, type: 'file' | 'dir') => {
     if (type === 'dir') {
@@ -167,15 +326,39 @@ export function RepoView({ gitea }: RepoViewProps) {
     setSelectedFile(null);
   };
 
+  const openGoToFile = async () => {
+    setIsGoToFileOpen(true);
+    if (!owner || !repoName || repoTree.length > 0 || loadingTree) return;
+    setLoadingTree(true);
+    try {
+      const branch = branches.find(item => item.name === currentBranch);
+      const tree = await gitea.getGitTree(owner, repoName, branch?.commit.sha || currentBranch, true);
+      setRepoTree(tree.tree || []);
+    } catch (error) {
+      console.error('Failed to load repository tree:', error);
+    } finally {
+      setLoadingTree(false);
+    }
+  };
+
+  const handleGoToFile = (path: string) => {
+    const parentPath = path.split('/').slice(0, -1).join('/');
+    setCurrentPath(parentPath);
+    setSearchParams({ path: parentPath });
+    setIsGoToFileOpen(false);
+    setGoToFileQuery('');
+    loadContents(path);
+  };
+
   const handleSave = async () => {
     if (!selectedFile || !owner || !repoName) return;
     setSaving(true);
     try {
-      const base64Content = btoa(fileContent);
+      const base64Content = encodeBase64(fileContent);
       await gitea.updateFile(owner, repoName, selectedFile.path, {
         content: base64Content,
         sha: selectedFile.sha,
-        message: `Update ${selectedFile.name}`,
+        message: commitMessage.trim() || `Update ${selectedFile.name}`,
         branch: currentBranch
       });
       loadContents(selectedFile.path);
@@ -186,11 +369,139 @@ export function RepoView({ gitea }: RepoViewProps) {
     }
   };
 
+  const handleCreateFile = async () => {
+    if (!owner || !repoName || !newFileName.trim()) return;
+    const normalizedName = newFileName.trim().replace(/^\/+/, '');
+    const filePath = [currentPath, normalizedName].filter(Boolean).join('/');
+    setSaving(true);
+    try {
+      await gitea.createFile(owner, repoName, filePath, {
+        content: encodeBase64(newFileContent),
+        message: newFileMessage.trim() || `Create ${normalizedName.split('/').pop()}`,
+        branch: currentBranch,
+      });
+      setIsCreateFileOpen(false);
+      setNewFileName('');
+      setNewFileContent('');
+      setNewFileMessage('');
+      await loadContents(currentPath);
+    } catch (error) {
+      console.error('Failed to create file:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteFile = async () => {
+    if (!selectedFile || !owner || !repoName) return;
+    setSaving(true);
+    try {
+      await gitea.deleteFile(owner, repoName, selectedFile.path, {
+        sha: selectedFile.sha,
+        message: `Delete ${selectedFile.name}`,
+        branch: currentBranch,
+      });
+      const parentPath = selectedFile.path.split('/').slice(0, -1).join('/');
+      setSelectedFile(null);
+      setCurrentPath(parentPath);
+      setSearchParams({ path: parentPath });
+      await loadContents(parentPath);
+    } catch (error) {
+      console.error('Failed to delete file:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const copyCloneUrl = () => {
     if (repository) {
       navigator.clipboard.writeText(repository.clone_url);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleToggleStar = async () => {
+    if (!owner || !repoName || !repository) return;
+    setEngagementSaving('star');
+    try {
+      if (isStarred) {
+        await gitea.unstarRepository(owner, repoName);
+      } else {
+        await gitea.starRepository(owner, repoName);
+      }
+      const nextStarred = !isStarred;
+      setIsStarred(nextStarred);
+      setRepository({
+        ...repository,
+        stars_count: Math.max(0, repository.stars_count + (nextStarred ? 1 : -1)),
+      });
+    } catch (error) {
+      console.error('Failed to update star state:', error);
+    } finally {
+      setEngagementSaving(null);
+    }
+  };
+
+  const handleToggleWatch = async () => {
+    if (!owner || !repoName || !repository) return;
+    setEngagementSaving('watch');
+    try {
+      if (isWatching) {
+        await gitea.unwatchRepository(owner, repoName);
+      } else {
+        await gitea.watchRepository(owner, repoName);
+      }
+      const nextWatching = !isWatching;
+      setIsWatching(nextWatching);
+      setRepository({
+        ...repository,
+        watchers_count: Math.max(0, repository.watchers_count + (nextWatching ? 1 : -1)),
+      });
+    } catch (error) {
+      console.error('Failed to update watch state:', error);
+    } finally {
+      setEngagementSaving(null);
+    }
+  };
+
+  const handleCreateCommitStatus = async () => {
+    if (!owner || !repoName || !selectedCommit || !newStatusContext.trim()) return;
+    setSaving(true);
+    try {
+      const status = await gitea.createCommitStatus(owner, repoName, selectedCommit.sha, {
+        state: newStatusState,
+        context: newStatusContext.trim(),
+        description: newStatusDescription.trim() || undefined,
+        target_url: newStatusTargetUrl.trim() || undefined,
+      });
+      setCommitStatuses([status, ...commitStatuses]);
+      setNewStatusDescription('');
+      setNewStatusTargetUrl('');
+    } catch (error) {
+      console.error('Failed to create commit status:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreateFork = async () => {
+    if (!owner || !repoName) return;
+    setSaving(true);
+    try {
+      const fork = await gitea.createRepositoryFork(owner, repoName, {
+        organization: forkOrganization.trim() || undefined,
+        name: forkName.trim() || undefined,
+      });
+      setForks([fork, ...forks]);
+      setIsForkDialogOpen(false);
+      setForkOrganization('');
+      setForkName('');
+      navigate(`/repo/${fork.owner.login}/${fork.name}`);
+    } catch (error) {
+      console.error('Failed to fork repository:', error);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -221,12 +532,98 @@ export function RepoView({ gitea }: RepoViewProps) {
           </Badge>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline" size="sm" className="h-8 border-slate-200 text-slate-600 hover:bg-slate-50">
-            <Star className="w-3.5 h-3.5 mr-2" /> Star ({repository.stars_count})
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleToggleStar}
+            disabled={engagementSaving === 'star'}
+            className={cn(
+              "h-8 border-slate-200 hover:bg-slate-50",
+              isStarred ? "text-amber-600 bg-amber-50 border-amber-100 hover:bg-amber-100" : "text-slate-600"
+            )}
+          >
+            <Star className={cn("w-3.5 h-3.5 mr-2", isStarred && "fill-current")} /> {isStarred ? 'Starred' : 'Star'} ({repository.stars_count})
           </Button>
-          <Button variant="outline" size="sm" className="h-8 border-slate-200 text-slate-600 hover:bg-slate-50">
-            <Eye className="w-3.5 h-3.5 mr-2" /> Watch ({repository.watchers_count})
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleToggleWatch}
+            disabled={engagementSaving === 'watch'}
+            className={cn(
+              "h-8 border-slate-200 hover:bg-slate-50",
+              isWatching ? "text-sky-600 bg-sky-50 border-sky-100 hover:bg-sky-100" : "text-slate-600"
+            )}
+          >
+            <Eye className="w-3.5 h-3.5 mr-2" /> {isWatching ? 'Watching' : 'Watch'} ({repository.watchers_count})
           </Button>
+          <Dialog open={isForkDialogOpen} onOpenChange={setIsForkDialogOpen}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsForkDialogOpen(true)}
+              className="h-8 border-slate-200 text-slate-600 hover:bg-slate-50"
+            >
+              <GitFork className="w-3.5 h-3.5 mr-2" /> Fork ({repository.forks_count})
+            </Button>
+            <DialogContent className="sm:max-w-xl bg-white">
+              <DialogHeader>
+                <DialogTitle>Fork Repository</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-5">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Name</label>
+                    <Input
+                      value={forkName}
+                      onChange={(event) => setForkName(event.target.value)}
+                      placeholder={repository.name}
+                      className="h-10 border-slate-200"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Organization</label>
+                    <Input
+                      value={forkOrganization}
+                      onChange={(event) => setForkOrganization(event.target.value)}
+                      placeholder="optional"
+                      className="h-10 border-slate-200"
+                    />
+                  </div>
+                </div>
+                <div className="bg-slate-50 border border-slate-100 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                    <span className="text-sm font-bold text-slate-900">Existing forks</span>
+                    <Button variant="ghost" size="sm" onClick={loadForks} className="h-7 text-slate-500">
+                      Refresh
+                    </Button>
+                  </div>
+                  <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                    {forks.map((fork) => (
+                      <Link
+                        key={fork.id}
+                        to={`/repo/${fork.owner.login}/${fork.name}`}
+                        onClick={() => setIsForkDialogOpen(false)}
+                        className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-white"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-slate-900 truncate">{fork.full_name}</div>
+                          <div className="text-xs text-slate-400 truncate">{fork.description || 'No description'}</div>
+                        </div>
+                        <Badge variant="outline" className="border-slate-200 text-slate-500 text-[10px]">{fork.private ? 'Private' : 'Public'}</Badge>
+                      </Link>
+                    ))}
+                    {forks.length === 0 && <div className="p-6 text-center text-sm text-slate-400">No forks found</div>}
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setIsForkDialogOpen(false)} className="border-slate-200 text-slate-600">Cancel</Button>
+                <Button onClick={handleCreateFork} disabled={saving} className="bg-sky-600 text-white hover:bg-sky-700">
+                  <GitFork className="w-3.5 h-3.5 mr-2" /> {saving ? 'Forking...' : 'Create Fork'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           <Button 
             onClick={copyCloneUrl}
             size="sm"
@@ -249,6 +646,24 @@ export function RepoView({ gitea }: RepoViewProps) {
             </TabsTrigger>
             <TabsTrigger value="issues" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <MessageSquare className="w-3.5 h-3.5 mr-2" /> Issues
+            </TabsTrigger>
+            <TabsTrigger value="pulls" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <GitPullRequest className="w-3.5 h-3.5 mr-2" /> Pull Requests
+            </TabsTrigger>
+            <TabsTrigger value="releases" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <Package className="w-3.5 h-3.5 mr-2" /> Releases
+            </TabsTrigger>
+            <TabsTrigger value="tags" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <Tag className="w-3.5 h-3.5 mr-2" /> Tags
+            </TabsTrigger>
+            <TabsTrigger value="wiki" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <BookOpen className="w-3.5 h-3.5 mr-2" /> Wiki
+            </TabsTrigger>
+            <TabsTrigger value="insights" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <Activity className="w-3.5 h-3.5 mr-2" /> Insights
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <Settings className="w-3.5 h-3.5 mr-2" /> Settings
             </TabsTrigger>
           </TabsList>
         </div>
@@ -303,8 +718,12 @@ export function RepoView({ gitea }: RepoViewProps) {
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="h-8 border-slate-200 text-slate-600">Go to File</Button>
-                  <Button variant="outline" size="sm" className="h-8 border-slate-200 text-slate-600">Add file</Button>
+                  <Button variant="outline" size="sm" onClick={openGoToFile} className="h-8 border-slate-200 text-slate-600">
+                    <Search className="w-3.5 h-3.5 mr-2" /> Go to File
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setIsCreateFileOpen(true)} className="h-8 border-slate-200 text-slate-600">
+                    <Plus className="w-3.5 h-3.5 mr-2" /> Add file
+                  </Button>
                 </div>
               </div>
 
@@ -415,14 +834,31 @@ export function RepoView({ gitea }: RepoViewProps) {
                       <span className="text-slate-900 font-bold"> {selectedFile.name}</span>
                     </div>
                       </div>
-                      <Button 
-                        onClick={handleSave}
-                        disabled={saving}
-                        size="sm"
-                        className="h-8 bg-slate-900 text-white hover:bg-slate-800"
-                      >
-                        <Save className="w-3.5 h-3.5 mr-2" /> {saving ? 'Saving...' : 'Save Changes'}
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={commitMessage}
+                          onChange={(event) => setCommitMessage(event.target.value)}
+                          placeholder="Commit message"
+                          className="h-8 w-64 border-slate-200 text-xs"
+                        />
+                        <Button
+                          variant="outline"
+                          onClick={handleDeleteFile}
+                          disabled={saving}
+                          size="sm"
+                          className="h-8 border-red-100 text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete
+                        </Button>
+                        <Button 
+                          onClick={handleSave}
+                          disabled={saving}
+                          size="sm"
+                          className="h-8 bg-slate-900 text-white hover:bg-slate-800"
+                        >
+                          <Save className="w-3.5 h-3.5 mr-2" /> {saving ? 'Saving...' : 'Save Changes'}
+                        </Button>
+                      </div>
                     </div>
                     <div className="flex-1">
                       <Editor
@@ -449,12 +885,15 @@ export function RepoView({ gitea }: RepoViewProps) {
 
               {/* README Preview */}
               <div className="p-6 bg-white border border-slate-200 rounded-xl shadow-sm">
-                <h3 className="text-sm font-bold text-slate-900 mb-4">README.md</h3>
+                <h3 className="text-sm font-bold text-slate-900 mb-4">{readmeName || 'README'}</h3>
                 <div className="h-px bg-slate-100 mb-6" />
-                <p className="text-sm leading-relaxed text-slate-500">
-                  <strong>{repository.name}</strong> is a robust repository managed via GitFlow. 
-                  Includes pre-configured CI/CD pipelines, unit testing suites, and a design system core.
-                </p>
+                {readmeContent ? (
+                  <div className="prose prose-slate prose-sm max-w-none">
+                    <ReactMarkdown>{readmeContent}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <p className="text-sm leading-relaxed text-slate-500">No README found on {currentBranch}.</p>
+                )}
               </div>
             </div>
           </ScrollArea>
@@ -529,6 +968,73 @@ export function RepoView({ gitea }: RepoViewProps) {
             <IssuesView gitea={gitea} owner={owner} repo={repoName} />
           )}
         </TabsContent>
+
+        <TabsContent value="pulls" className="flex-1 flex flex-col overflow-hidden m-0">
+          {owner && repoName && (
+            <PullRequestsView
+              gitea={gitea}
+              owner={owner}
+              repo={repoName}
+              defaultBranch={repository.default_branch}
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="releases" className="flex-1 flex flex-col overflow-hidden m-0">
+          {owner && repoName && (
+            <ReleasesView
+              gitea={gitea}
+              owner={owner}
+              repo={repoName}
+              defaultBranch={repository.default_branch}
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="tags" className="flex-1 flex flex-col overflow-hidden m-0">
+          {owner && repoName && (
+            <TagsView
+              gitea={gitea}
+              owner={owner}
+              repo={repoName}
+              branches={branches}
+              defaultBranch={repository.default_branch}
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="wiki" className="flex-1 flex flex-col overflow-hidden m-0">
+          {owner && repoName && (
+            <WikiView
+              gitea={gitea}
+              owner={owner}
+              repo={repoName}
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="insights" className="flex-1 flex flex-col overflow-hidden m-0">
+          {owner && repoName && (
+            <RepositoryInsightsView
+              gitea={gitea}
+              owner={owner}
+              repo={repoName}
+              repository={repository}
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="settings" className="flex-1 flex flex-col overflow-hidden m-0">
+          {owner && repoName && (
+            <RepositorySettingsView
+              gitea={gitea}
+              owner={owner}
+              repo={repoName}
+              repository={repository}
+              onRepositoryUpdate={setRepository}
+            />
+          )}
+        </TabsContent>
       </Tabs>
 
       {/* Commit Detail Sheet */}
@@ -580,10 +1086,177 @@ export function RepoView({ gitea }: RepoViewProps) {
                   )}
                 </div>
               </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Statuses</div>
+                  {loadingStatuses && <div className="text-[10px] text-slate-400">Loading...</div>}
+                </div>
+                <div className="space-y-2">
+                  {commitStatuses.map((status, index) => (
+                    <div key={`${status.id || status.context || 'status'}-${index}`} className="p-3 bg-white border border-slate-200 rounded-lg space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-900 truncate">{status.context || 'default'}</div>
+                          <div className="text-[10px] text-slate-400 truncate">{status.description || 'No description'}</div>
+                        </div>
+                        <Badge variant="outline" className={cn("border text-[10px]", statusClasses[status.state] || statusClasses.pending)}>
+                          {statusLabels[status.state] || status.state}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center justify-between gap-3 text-[10px] text-slate-400">
+                        <span>{status.creator?.login ? `by ${status.creator.login}` : status.created_at ? new Date(status.created_at).toLocaleString() : 'Commit status'}</span>
+                        {status.target_url && (
+                          <a href={status.target_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sky-600 hover:text-sky-700">
+                            Details <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {!loadingStatuses && commitStatuses.length === 0 && (
+                    <div className="text-xs text-slate-400 italic">No commit statuses reported.</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-100 space-y-3">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                  <Activity className="w-3.5 h-3.5 text-slate-400" />
+                  Add status
+                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger render={
+                    <Button variant="outline" className="w-full h-9 justify-between bg-white border-slate-200 text-xs">
+                      <span className="flex items-center gap-2">
+                        {newStatusState === 'success' ? <Check className="w-3.5 h-3.5 text-green-600" /> : newStatusState === 'pending' ? <Clock className="w-3.5 h-3.5 text-amber-600" /> : <XCircle className="w-3.5 h-3.5 text-red-600" />}
+                        {statusLabels[newStatusState]}
+                      </span>
+                      <ChevronRight className="w-3.5 h-3.5 opacity-50 rotate-90" />
+                    </Button>
+                  } />
+                  <DropdownMenuContent align="start" className="w-56 bg-white">
+                    {(['success', 'pending', 'failure', 'error', 'warning'] as CommitStatusState[]).map((state) => (
+                      <DropdownMenuItem key={state} onClick={() => setNewStatusState(state)} className="text-xs">
+                        {statusLabels[state]}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Input
+                  value={newStatusContext}
+                  onChange={(event) => setNewStatusContext(event.target.value)}
+                  placeholder="Context"
+                  className="h-9 border-slate-200 bg-white text-xs"
+                />
+                <Input
+                  value={newStatusDescription}
+                  onChange={(event) => setNewStatusDescription(event.target.value)}
+                  placeholder="Description"
+                  className="h-9 border-slate-200 bg-white text-xs"
+                />
+                <Input
+                  value={newStatusTargetUrl}
+                  onChange={(event) => setNewStatusTargetUrl(event.target.value)}
+                  placeholder="Target URL"
+                  className="h-9 border-slate-200 bg-white text-xs"
+                />
+                <Button onClick={handleCreateCommitStatus} disabled={!newStatusContext.trim() || saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
+                  <Activity className="w-3.5 h-3.5 mr-2" /> {saving ? 'Adding...' : 'Add Status'}
+                </Button>
+              </div>
             </div>
           )}
         </SheetContent>
       </Sheet>
+
+      <Dialog open={isCreateFileOpen} onOpenChange={setIsCreateFileOpen}>
+        <DialogContent className="sm:max-w-3xl bg-white">
+          <DialogHeader>
+            <DialogTitle>Create File</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-[1fr_1fr] gap-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Path</label>
+                <Input
+                  value={newFileName}
+                  onChange={(event) => setNewFileName(event.target.value)}
+                  placeholder={currentPath ? `${currentPath}/new-file.ts` : 'new-file.ts'}
+                  className="h-10 border-slate-200 font-mono text-xs"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Commit message</label>
+                <Input
+                  value={newFileMessage}
+                  onChange={(event) => setNewFileMessage(event.target.value)}
+                  placeholder="Create new file"
+                  className="h-10 border-slate-200 text-xs"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Content</label>
+              <textarea
+                value={newFileContent}
+                onChange={(event) => setNewFileContent(event.target.value)}
+                className="h-80 w-full resize-none rounded-lg border border-slate-200 bg-slate-950 p-4 font-mono text-xs leading-relaxed text-slate-100 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
+                spellCheck={false}
+              />
+            </div>
+          </div>
+          <DialogFooter className="bg-white border-slate-100">
+            <Button variant="outline" onClick={() => setIsCreateFileOpen(false)}>Cancel</Button>
+            <Button onClick={handleCreateFile} disabled={!newFileName.trim() || saving} className="bg-sky-600 text-white hover:bg-sky-700">
+              <Plus className="w-3.5 h-3.5 mr-2" /> {saving ? 'Creating...' : 'Create File'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isGoToFileOpen} onOpenChange={setIsGoToFileOpen}>
+        <DialogContent className="sm:max-w-2xl bg-white">
+          <DialogHeader>
+            <DialogTitle>Go to File</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <Input
+                autoFocus
+                value={goToFileQuery}
+                onChange={(event) => setGoToFileQuery(event.target.value)}
+                placeholder="Search by path..."
+                className="h-10 pl-10 border-slate-200 font-mono text-xs"
+              />
+            </div>
+            <ScrollArea className="h-96 rounded-lg border border-slate-100">
+              <div className="divide-y divide-slate-100">
+                {loadingTree ? (
+                  <div className="p-8 text-center text-sm text-slate-400">Loading repository tree...</div>
+                ) : filteredRepoFiles.length > 0 ? (
+                  filteredRepoFiles.map((item) => (
+                    <button
+                      key={item.sha + item.path}
+                      type="button"
+                      onClick={() => handleGoToFile(item.path)}
+                      className="w-full px-4 py-3 text-left hover:bg-slate-50 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-3 h-3 rounded-[3px] bg-slate-400 shrink-0" />
+                        <span className="font-mono text-xs text-slate-700 truncate">{item.path}</span>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="p-8 text-center text-sm text-slate-400">No files found</div>
+                )}
+              </div>
+            </ScrollArea>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

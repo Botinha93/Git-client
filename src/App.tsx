@@ -5,10 +5,13 @@
 
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { GiteaService, GiteaConfig, Repository } from './lib/gitea';
+import { GiteaService, GiteaConfig, GiteaUser, Repository } from './lib/gitea';
 import { Auth } from './components/Auth';
 import { Layout } from './components/Layout';
 import { RepoView } from './components/RepoView';
+import { Dashboard } from './components/Dashboard';
+import { ExploreView } from './components/ExploreView';
+import { AccountView } from './components/AccountView';
 
 export default function App() {
   const [config, setConfig] = useState<GiteaConfig | null>(() => {
@@ -16,7 +19,7 @@ export default function App() {
     return saved ? JSON.parse(saved) : null;
   });
   const [gitea, setGitea] = useState<GiteaService | null>(null);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<GiteaUser | null>(null);
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -64,6 +67,10 @@ export default function App() {
     setRepositories([]);
   };
 
+  const handleRepositoryCreated = (repository: Repository) => {
+    setRepositories((current) => [repository, ...current.filter((item) => item.id !== repository.id)]);
+  };
+
   if (loading && config) {
     return (
       <div className="h-screen flex items-center justify-center bg-[#E4E3E0]">
@@ -81,28 +88,29 @@ export default function App() {
       <Layout repositories={repositories} onLogout={handleLogout} user={user}>
         <Routes>
           <Route path="/" element={
-            <div className="flex-1 flex items-center justify-center p-8 text-center">
-              <div className="max-w-md">
-                <h2 className="font-serif italic text-3xl mb-4">Welcome to GitForge</h2>
-                <p className="text-sm opacity-60 mb-8">Select a repository from the sidebar to start exploring and editing your code.</p>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-6 border-2 border-[#141414] bg-white text-left">
-                    <div className="font-mono text-[10px] uppercase opacity-50 mb-2">Total Repos</div>
-                    <div className="text-2xl font-bold">{repositories.length}</div>
-                  </div>
-                  <div className="p-6 border-2 border-[#141414] bg-white text-left">
-                    <div className="font-mono text-[10px] uppercase opacity-50 mb-2">User</div>
-                    <div className="text-sm font-bold truncate">{user?.login}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <Dashboard
+              gitea={gitea!}
+              user={user}
+              repositories={repositories}
+              onRepositoryCreated={handleRepositoryCreated}
+            />
           } />
           <Route path="/repo/:owner/:repo" element={<RepoView gitea={gitea!} />} />
+          <Route path="/explore" element={<ExploreView gitea={gitea!} />} />
+          <Route path="/account" element={
+            user ? (
+              <AccountView
+                gitea={gitea!}
+                user={user}
+                onUserUpdate={setUser}
+              />
+            ) : (
+              <Navigate to="/" />
+            )
+          } />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </Layout>
     </Router>
   );
 }
-
