@@ -1,0 +1,95 @@
+import React from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import { Button } from '@/components/ui/button';
+import { Repository } from '@/src/lib/gitea';
+import { 
+  Book, 
+  ChevronRight, 
+  Folder, 
+  GitBranch, 
+  History, 
+  Layout as LayoutIcon, 
+  LogOut, 
+  Search, 
+  Settings, 
+  Star 
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+interface LayoutProps {
+  children: React.ReactNode;
+  repositories: Repository[];
+  onLogout: () => void;
+  user: any;
+}
+
+export function Layout({ children, repositories, onLogout, user }: LayoutProps) {
+  const location = useLocation();
+
+  return (
+    <div className="flex h-screen bg-slate-100 text-slate-700 font-sans">
+      {/* Sidebar */}
+      <aside className="w-[240px] bg-slate-900 text-slate-400 flex flex-col h-full shrink-0">
+        <div className="p-6 flex items-center gap-3 text-slate-50 font-bold text-xl">
+          <div className="w-7 h-7 bg-gradient-to-br from-sky-400 to-indigo-400 rounded-md" />
+          <span>GitFlow</span>
+        </div>
+
+        <nav className="mt-5 flex-1 overflow-y-auto">
+          <div className="px-6 mb-2 text-[10px] uppercase tracking-widest opacity-50 font-semibold">
+            Repositories
+          </div>
+          <div className="space-y-0.5">
+            {repositories.map((repo) => {
+              const isActive = location.pathname.includes(`/repo/${repo.owner.login}/${repo.name}`);
+              return (
+                <Link
+                  key={repo.id}
+                  to={`/repo/${repo.owner.login}/${repo.name}`}
+                  className={cn(
+                    "flex items-center gap-3 px-6 py-3 text-sm transition-colors relative",
+                    isActive
+                      ? "bg-slate-700 text-slate-50 border-l-4 border-sky-400"
+                      : "hover:bg-slate-800 hover:text-slate-50"
+                  )}
+                >
+                  <Folder className={cn("w-4 h-4", isActive ? "text-sky-400" : "opacity-50")} />
+                  <span className="truncate">{repo.name}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </nav>
+
+        <div className="p-6 border-t border-slate-800 bg-slate-900/50">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-8 h-8 rounded-full overflow-hidden border border-slate-700">
+              <img src={user?.avatar_url} alt={user?.login} className="w-full h-full object-cover" />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span className="text-xs font-bold text-slate-50 truncate">{user?.full_name || user?.login}</span>
+              <span className="text-[10px] opacity-50 truncate">@{user?.login}</span>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 h-8 border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-50 rounded-md"
+              onClick={onLogout}
+            >
+              <LogOut className="w-3.5 h-3.5 mr-2" /> Logout
+            </Button>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col overflow-hidden">
+        {children}
+      </main>
+    </div>
+  );
+}

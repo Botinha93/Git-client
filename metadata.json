@@ -1,0 +1,6 @@
+{
+  "name": "GitForge",
+  "description": "A fully-fledged Gitea web client for managing repositories, editing code, and version control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
