@@ -516,6 +516,7 @@ export interface AdminActionJob {
 
 export interface AdminActionRun {
   id: number;
+  name?: string;
   display_title?: string;
   event?: string;
   status?: string;
@@ -525,6 +526,57 @@ export interface AdminActionRun {
   created_at?: string;
   updated_at?: string;
   run_number?: number;
+}
+
+export interface ActionVariable {
+  name: string;
+  data?: string;
+  description?: string;
+  owner_id?: number;
+  repo_id?: number;
+}
+
+export interface ActionSecret {
+  name: string;
+  description?: string;
+  created_at?: string;
+}
+
+export interface ActionArtifact {
+  id: number;
+  name: string;
+  size_in_bytes?: number;
+  url?: string;
+  archive_download_url?: string;
+  created_at?: string;
+  updated_at?: string;
+  expires_at?: string;
+  expired?: boolean;
+  workflow_run?: {
+    id?: number;
+    repository_id?: number;
+    head_sha?: string;
+  };
+}
+
+export interface ActionWorkflow {
+  id: string;
+  name?: string;
+  path?: string;
+  state?: string;
+  badge_url?: string;
+  html_url?: string;
+  url?: string;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string;
+}
+
+export interface UserBadge {
+  id: number;
+  slug: string;
+  description?: string;
+  image_url?: string;
 }
 
 export interface Collaborator extends GiteaUser {
@@ -566,6 +618,7 @@ export interface Hook {
   id: number;
   type: string;
   active: boolean;
+  authorization_header?: string;
   config: Record<string, string>;
   events: string[];
   branch_filter?: string;
@@ -659,6 +712,11 @@ export interface EmailAddress {
   verified: boolean;
   primary: boolean;
   user_id?: number;
+  username?: string;
+}
+
+export interface ServerVersion {
+  version: string;
 }
 
 export interface GpgKey {
@@ -761,12 +819,41 @@ export class GiteaService {
     return response.data;
   }
 
+  private async requestText(method: string, endpoint: string, data?: any, params?: any) {
+    const url = `${this.config.baseUrl}/api/v1${endpoint}`;
+    const response = await axios({
+      method: 'POST',
+      url: '/api/proxy',
+      data,
+      params,
+      responseType: 'text',
+      headers: {
+        'x-target-url': url,
+        'x-gitea-token': this.config.token,
+        'x-proxy-method': method,
+      },
+    });
+    return response.data as string;
+  }
+
   async getUser() {
     return this.request('GET', '/user') as Promise<GiteaUser>;
   }
 
+  async getServerVersion() {
+    return this.request('GET', '/version') as Promise<ServerVersion>;
+  }
+
+  async getSigningKey() {
+    return this.requestText('GET', '/signing-key.gpg');
+  }
+
   async getAdminUsers(params?: { source_id?: number; login_name?: string; page?: number; limit?: number }) {
     return this.request('GET', '/admin/users', null, params) as Promise<GiteaUser[]>;
+  }
+
+  async searchAdminEmails(params?: { q?: string; page?: number; limit?: number }) {
+    return this.request('GET', '/admin/emails/search', null, params) as Promise<EmailAddress[]>;
   }
 
   async createAdminUser(data: {
@@ -843,8 +930,53 @@ export class GiteaService {
     return this.request('DELETE', `/admin/users/${encodeURIComponent(username)}`, null, { purge });
   }
 
+  async getAdminUserBadges(username: string) {
+    return this.request('GET', `/admin/users/${encodeURIComponent(username)}/badges`) as Promise<UserBadge[]>;
+  }
+
+  async addAdminUserBadges(username: string, badge_slugs: string[]) {
+    return this.request('POST', `/admin/users/${encodeURIComponent(username)}/badges`, { badge_slugs });
+  }
+
+  async removeAdminUserBadges(username: string, badge_slugs: string[]) {
+    return this.request('DELETE', `/admin/users/${encodeURIComponent(username)}/badges`, { badge_slugs });
+  }
+
   async getAdminOrganizations(params?: { page?: number; limit?: number }) {
     return this.request('GET', '/admin/orgs', null, params) as Promise<Organization[]>;
+  }
+
+  async getAdminHooks(params?: { page?: number; limit?: number; type?: 'system' | 'default' | 'all' }) {
+    return this.request('GET', '/admin/hooks', null, params) as Promise<Hook[]>;
+  }
+
+  async getAdminHook(id: number) {
+    return this.request('GET', `/admin/hooks/${id}`) as Promise<Hook>;
+  }
+
+  async createAdminHook(data: {
+    type: string;
+    config: Record<string, string>;
+    events?: string[];
+    active?: boolean;
+    branch_filter?: string;
+    authorization_header?: string;
+  }) {
+    return this.request('POST', '/admin/hooks', data) as Promise<Hook>;
+  }
+
+  async updateAdminHook(id: number, data: {
+    config?: Record<string, string>;
+    events?: string[];
+    active?: boolean;
+    branch_filter?: string;
+    authorization_header?: string;
+  }) {
+    return this.request('PATCH', `/admin/hooks/${id}`, data) as Promise<Hook>;
+  }
+
+  async deleteAdminHook(id: number) {
+    return this.request('DELETE', `/admin/hooks/${id}`);
   }
 
   async getAdminUnadoptedRepositories(params?: { pattern?: string; page?: number; limit?: number }) {
@@ -1182,6 +1314,50 @@ export class GiteaService {
     return this.request('DELETE', `/orgs/${encodeURIComponent(org)}/hooks/${id}`);
   }
 
+  async getOrganizationActionVariables(org: string, params?: { page?: number; limit?: number }) {
+    return this.request('GET', `/orgs/${encodeURIComponent(org)}/actions/variables`, null, params) as Promise<ActionVariable[]>;
+  }
+
+  async createOrganizationActionVariable(org: string, name: string, data: { value: string; description?: string }) {
+    return this.request('POST', `/orgs/${encodeURIComponent(org)}/actions/variables/${encodeURIComponent(name)}`, data);
+  }
+
+  async updateOrganizationActionVariable(org: string, name: string, data: { value: string; description?: string; name?: string }) {
+    return this.request('PUT', `/orgs/${encodeURIComponent(org)}/actions/variables/${encodeURIComponent(name)}`, data);
+  }
+
+  async deleteOrganizationActionVariable(org: string, name: string) {
+    return this.request('DELETE', `/orgs/${encodeURIComponent(org)}/actions/variables/${encodeURIComponent(name)}`);
+  }
+
+  async getOrganizationActionSecrets(org: string, params?: { page?: number; limit?: number }) {
+    return this.request('GET', `/orgs/${encodeURIComponent(org)}/actions/secrets`, null, params) as Promise<ActionSecret[]>;
+  }
+
+  async createOrUpdateOrganizationActionSecret(org: string, name: string, data: { data: string; description?: string }) {
+    return this.request('PUT', `/orgs/${encodeURIComponent(org)}/actions/secrets/${encodeURIComponent(name)}`, data);
+  }
+
+  async deleteOrganizationActionSecret(org: string, name: string) {
+    return this.request('DELETE', `/orgs/${encodeURIComponent(org)}/actions/secrets/${encodeURIComponent(name)}`);
+  }
+
+  async getOrganizationActionRunners(org: string) {
+    return this.request('GET', `/orgs/${encodeURIComponent(org)}/actions/runners`) as Promise<{ runners: AdminActionRunner[]; total_count?: number }>;
+  }
+
+  async getOrganizationActionRunner(org: string, runnerId: string | number) {
+    return this.request('GET', `/orgs/${encodeURIComponent(org)}/actions/runners/${encodeURIComponent(String(runnerId))}`) as Promise<AdminActionRunner>;
+  }
+
+  async deleteOrganizationActionRunner(org: string, runnerId: string | number) {
+    return this.request('DELETE', `/orgs/${encodeURIComponent(org)}/actions/runners/${encodeURIComponent(String(runnerId))}`);
+  }
+
+  async createOrganizationActionRunnerRegistrationToken(org: string) {
+    return this.request('POST', `/orgs/${encodeURIComponent(org)}/actions/runners/registration-token`) as Promise<{ token: string }>;
+  }
+
   async createOrganizationRepository(org: string, data: {
     name: string;
     description?: string;
@@ -1194,6 +1370,18 @@ export class GiteaService {
 
   async getOrganizationMembers(org: string) {
     return this.request('GET', `/orgs/${encodeURIComponent(org)}/members`) as Promise<GiteaUser[]>;
+  }
+
+  async getOrganizationBlocks(org: string, params?: { page?: number; limit?: number }) {
+    return this.request('GET', `/orgs/${encodeURIComponent(org)}/blocks`, null, params) as Promise<GiteaUser[]>;
+  }
+
+  async blockOrganizationUser(org: string, username: string, note?: string) {
+    return this.request('PUT', `/orgs/${encodeURIComponent(org)}/blocks/${encodeURIComponent(username)}`, null, note ? { note } : undefined);
+  }
+
+  async unblockOrganizationUser(org: string, username: string) {
+    return this.request('DELETE', `/orgs/${encodeURIComponent(org)}/blocks/${encodeURIComponent(username)}`);
   }
 
   async getOrganizationPublicMembers(org: string) {
@@ -1957,6 +2145,86 @@ export class GiteaService {
 
   async deleteRepositoryHook(owner: string, repo: string, id: number) {
     return this.request('DELETE', `/repos/${owner}/${repo}/hooks/${id}`);
+  }
+
+  async getRepositoryActionVariables(owner: string, repo: string, params?: { page?: number; limit?: number }) {
+    return this.request('GET', `/repos/${owner}/${repo}/actions/variables`, null, params) as Promise<ActionVariable[]>;
+  }
+
+  async getRepositoryActionVariable(owner: string, repo: string, name: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/actions/variables/${encodeURIComponent(name)}`) as Promise<ActionVariable>;
+  }
+
+  async createRepositoryActionVariable(owner: string, repo: string, name: string, data: { value: string; description?: string }) {
+    return this.request('POST', `/repos/${owner}/${repo}/actions/variables/${encodeURIComponent(name)}`, data);
+  }
+
+  async updateRepositoryActionVariable(owner: string, repo: string, name: string, data: { value: string; description?: string; name?: string }) {
+    return this.request('PUT', `/repos/${owner}/${repo}/actions/variables/${encodeURIComponent(name)}`, data);
+  }
+
+  async deleteRepositoryActionVariable(owner: string, repo: string, name: string) {
+    return this.request('DELETE', `/repos/${owner}/${repo}/actions/variables/${encodeURIComponent(name)}`);
+  }
+
+  async getRepositoryActionSecrets(owner: string, repo: string, params?: { page?: number; limit?: number }) {
+    return this.request('GET', `/repos/${owner}/${repo}/actions/secrets`, null, params) as Promise<ActionSecret[]>;
+  }
+
+  async createOrUpdateRepositoryActionSecret(owner: string, repo: string, name: string, data: { data: string; description?: string }) {
+    return this.request('PUT', `/repos/${owner}/${repo}/actions/secrets/${encodeURIComponent(name)}`, data);
+  }
+
+  async deleteRepositoryActionSecret(owner: string, repo: string, name: string) {
+    return this.request('DELETE', `/repos/${owner}/${repo}/actions/secrets/${encodeURIComponent(name)}`);
+  }
+
+  async getRepositoryActionArtifacts(owner: string, repo: string, params?: { name?: string }) {
+    return this.request('GET', `/repos/${owner}/${repo}/actions/artifacts`, null, params) as Promise<{ artifacts: ActionArtifact[]; total_count: number }>;
+  }
+
+  async getRepositoryActionArtifact(owner: string, repo: string, artifactId: string | number) {
+    return this.request('GET', `/repos/${owner}/${repo}/actions/artifacts/${encodeURIComponent(String(artifactId))}`) as Promise<ActionArtifact>;
+  }
+
+  async getRepositoryActionWorkflows(owner: string, repo: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/actions/workflows`) as Promise<{ workflows: ActionWorkflow[]; total_count: number }>;
+  }
+
+  async getRepositoryActionWorkflow(owner: string, repo: string, workflowId: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}`) as Promise<ActionWorkflow>;
+  }
+
+  async enableRepositoryActionWorkflow(owner: string, repo: string, workflowId: string) {
+    return this.request('PUT', `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}/enable`);
+  }
+
+  async disableRepositoryActionWorkflow(owner: string, repo: string, workflowId: string) {
+    return this.request('PUT', `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}/disable`);
+  }
+
+  async dispatchRepositoryActionWorkflow(owner: string, repo: string, workflowId: string, data: { ref: string; inputs?: Record<string, string> }) {
+    return this.request('POST', `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}/dispatches`, data);
+  }
+
+  async getRepositoryActionRunners(owner: string, repo: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/actions/runners`) as Promise<{ runners: AdminActionRunner[]; total_count?: number }>;
+  }
+
+  async getRepositoryActionRunner(owner: string, repo: string, runnerId: string | number) {
+    return this.request('GET', `/repos/${owner}/${repo}/actions/runners/${encodeURIComponent(String(runnerId))}`) as Promise<AdminActionRunner>;
+  }
+
+  async deleteRepositoryActionRunner(owner: string, repo: string, runnerId: string | number) {
+    return this.request('DELETE', `/repos/${owner}/${repo}/actions/runners/${encodeURIComponent(String(runnerId))}`);
+  }
+
+  async createRepositoryActionRunnerRegistrationToken(owner: string, repo: string) {
+    return this.request('POST', `/repos/${owner}/${repo}/actions/runners/registration-token`) as Promise<{ token: string }>;
+  }
+
+  async getRepositoryActionTasks(owner: string, repo: string, params?: { page?: number; limit?: number }) {
+    return this.request('GET', `/repos/${owner}/${repo}/actions/tasks`, null, params) as Promise<{ workflow_runs: AdminActionRun[]; total_count: number }>;
   }
 
   async getDeployKeys(owner: string, repo: string) {

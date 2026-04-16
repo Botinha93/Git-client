@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Building2, Check, ChevronDown, FolderPlus, Plus, Save, Settings2, Tag, Trash2, UserPlus, Users, Webhook } from 'lucide-react';
-import { GiteaService, GiteaUser, Hook, Label, Organization, Repository, Team } from '@/src/lib/gitea';
+import { Building2, Check, ChevronDown, FolderPlus, KeyRound, Plus, Save, Settings2, Tag, Trash2, UserPlus, Users, Webhook, Workflow } from 'lucide-react';
+import { ActionSecret, ActionVariable, AdminActionRunner, GiteaService, GiteaUser, Hook, Label, Organization, Repository, Team } from '@/src/lib/gitea';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -48,6 +48,11 @@ export function OrganizationManager({
   const [teams, setTeams] = useState<Team[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
   const [hooks, setHooks] = useState<Hook[]>([]);
+  const [actionVariables, setActionVariables] = useState<ActionVariable[]>([]);
+  const [actionSecrets, setActionSecrets] = useState<ActionSecret[]>([]);
+  const [actionRunners, setActionRunners] = useState<AdminActionRunner[]>([]);
+  const [runnerRegistrationToken, setRunnerRegistrationToken] = useState('');
+  const [blockedUsers, setBlockedUsers] = useState<GiteaUser[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [teamMembers, setTeamMembers] = useState<GiteaUser[]>([]);
   const [teamRepos, setTeamRepos] = useState<Repository[]>([]);
@@ -72,6 +77,14 @@ export function OrganizationManager({
   const [hookUrl, setHookUrl] = useState('');
   const [hookSecret, setHookSecret] = useState('');
   const [hookEvents, setHookEvents] = useState('push,pull_request,issues');
+  const [variableName, setVariableName] = useState('');
+  const [variableValue, setVariableValue] = useState('');
+  const [variableDescription, setVariableDescription] = useState('');
+  const [secretName, setSecretName] = useState('');
+  const [secretValue, setSecretValue] = useState('');
+  const [secretDescription, setSecretDescription] = useState('');
+  const [blockUsername, setBlockUsername] = useState('');
+  const [blockNote, setBlockNote] = useState('');
   const [memberName, setMemberName] = useState('');
   const [repoName, setRepoName] = useState('');
   const [newRepoName, setNewRepoName] = useState('');
@@ -94,18 +107,26 @@ export function OrganizationManager({
   const loadOrganizationDetails = async (org: string) => {
     setLoadingDetails(true);
     try {
-      const [memberData, publicMemberData, teamData, labelData, hookData] = await Promise.all([
+      const [memberData, publicMemberData, teamData, labelData, hookData, variableData, secretData, runnerData, blockData] = await Promise.all([
         gitea.getOrganizationMembers(org),
         gitea.getOrganizationPublicMembers(org),
         gitea.getOrganizationTeams(org),
         gitea.getOrganizationLabels(org),
         gitea.getOrganizationHooks(org),
+        gitea.getOrganizationActionVariables(org, { limit: 100 }),
+        gitea.getOrganizationActionSecrets(org, { limit: 100 }),
+        gitea.getOrganizationActionRunners(org),
+        gitea.getOrganizationBlocks(org, { limit: 100 }),
       ]);
       setMembers(memberData);
       setPublicMembers(publicMemberData);
       setTeams(teamData);
       setLabels(labelData);
       setHooks(hookData);
+      setActionVariables(variableData);
+      setActionSecrets(secretData);
+      setActionRunners(runnerData.runners || []);
+      setBlockedUsers(blockData);
       if (teamData.length > 0) loadTeam(teamData[0]);
       else {
         setSelectedTeam(null);
@@ -434,6 +455,129 @@ export function OrganizationManager({
     }
   };
 
+  const handleCreateActionVariable = async () => {
+    if (!organization || !variableName.trim() || !variableValue.trim()) return;
+    setSaving(true);
+    try {
+      await gitea.createOrganizationActionVariable(organization.username, variableName.trim(), {
+        value: variableValue,
+        description: variableDescription.trim() || undefined,
+      });
+      const data = await gitea.getOrganizationActionVariables(organization.username, { limit: 100 });
+      setActionVariables(data);
+      setVariableName('');
+      setVariableValue('');
+      setVariableDescription('');
+    } catch (error) {
+      console.error('Failed to create organization action variable:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteActionVariable = async (name: string) => {
+    if (!organization) return;
+    setSaving(true);
+    try {
+      await gitea.deleteOrganizationActionVariable(organization.username, name);
+      setActionVariables(actionVariables.filter((item) => item.name !== name));
+    } catch (error) {
+      console.error('Failed to delete organization action variable:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreateActionSecret = async () => {
+    if (!organization || !secretName.trim() || !secretValue.trim()) return;
+    setSaving(true);
+    try {
+      await gitea.createOrUpdateOrganizationActionSecret(organization.username, secretName.trim(), {
+        data: secretValue,
+        description: secretDescription.trim() || undefined,
+      });
+      const data = await gitea.getOrganizationActionSecrets(organization.username, { limit: 100 });
+      setActionSecrets(data);
+      setSecretName('');
+      setSecretValue('');
+      setSecretDescription('');
+    } catch (error) {
+      console.error('Failed to save organization action secret:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteActionSecret = async (name: string) => {
+    if (!organization) return;
+    setSaving(true);
+    try {
+      await gitea.deleteOrganizationActionSecret(organization.username, name);
+      setActionSecrets(actionSecrets.filter((item) => item.name !== name));
+    } catch (error) {
+      console.error('Failed to delete organization action secret:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreateRunnerToken = async () => {
+    if (!organization) return;
+    setSaving(true);
+    try {
+      const response = await gitea.createOrganizationActionRunnerRegistrationToken(organization.username);
+      setRunnerRegistrationToken(response.token);
+    } catch (error) {
+      console.error('Failed to create organization runner token:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteRunner = async (runner: AdminActionRunner) => {
+    if (!organization) return;
+    setSaving(true);
+    try {
+      await gitea.deleteOrganizationActionRunner(organization.username, runner.id);
+      setActionRunners(actionRunners.filter((item) => String(item.id) !== String(runner.id)));
+    } catch (error) {
+      console.error('Failed to delete organization runner:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleBlockUser = async () => {
+    if (!organization || !blockUsername.trim()) return;
+    setSaving(true);
+    try {
+      await gitea.blockOrganizationUser(organization.username, blockUsername.trim(), blockNote.trim() || undefined);
+      const data = await gitea.getOrganizationBlocks(organization.username, { limit: 100 });
+      setBlockedUsers(data);
+      setBlockUsername('');
+      setBlockNote('');
+    } catch (error) {
+      console.error('Failed to block organization user:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUnblockUser = async (user: GiteaUser) => {
+    if (!organization) return;
+    const login = user.login || user.username || '';
+    if (!login) return;
+    setSaving(true);
+    try {
+      await gitea.unblockOrganizationUser(organization.username, login);
+      setBlockedUsers(blockedUsers.filter((item) => (item.login || item.username) !== login));
+    } catch (error) {
+      console.error('Failed to unblock organization user:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleDeleteOrganization = async () => {
     if (!organization || deleteConfirmation !== organization.username) return;
     setSaving(true);
@@ -692,6 +836,130 @@ export function OrganizationManager({
             ))}
             {hooks.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No organization webhooks</div>}
           </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-[1fr_1fr] gap-6">
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+          <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2 text-sm font-bold text-slate-900">
+            <Workflow className="w-4 h-4 text-slate-500" /> Actions variables
+          </div>
+          <div className="p-5 space-y-3 border-b border-slate-100">
+            <Input value={variableName} onChange={(event) => setVariableName(event.target.value)} placeholder="VARIABLE_NAME" className="h-9 border-slate-200 font-mono text-xs" />
+            <Input value={variableDescription} onChange={(event) => setVariableDescription(event.target.value)} placeholder="Description" className="h-9 border-slate-200 text-xs" />
+            <div className="grid grid-cols-[1fr_90px] gap-3">
+              <Input value={variableValue} onChange={(event) => setVariableValue(event.target.value)} placeholder="Variable value" className="h-9 border-slate-200 text-xs" />
+              <Button onClick={handleCreateActionVariable} disabled={!variableName.trim() || !variableValue.trim() || saving} className="h-9 bg-sky-600 text-white hover:bg-sky-700">
+                Save
+              </Button>
+            </div>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {actionVariables.map((variable) => (
+              <div key={variable.name} className="px-5 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-slate-900 truncate">{variable.name}</div>
+                  <div className="text-xs text-slate-400 truncate">{variable.description || 'No description'}</div>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => handleDeleteActionVariable(variable.name)} disabled={saving} className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ))}
+            {actionVariables.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No organization actions variables</div>}
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+          <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2 text-sm font-bold text-slate-900">
+            <KeyRound className="w-4 h-4 text-slate-500" /> Actions secrets
+          </div>
+          <div className="p-5 space-y-3 border-b border-slate-100">
+            <Input value={secretName} onChange={(event) => setSecretName(event.target.value)} placeholder="SECRET_NAME" className="h-9 border-slate-200 font-mono text-xs" />
+            <Input value={secretDescription} onChange={(event) => setSecretDescription(event.target.value)} placeholder="Description" className="h-9 border-slate-200 text-xs" />
+            <div className="grid grid-cols-[1fr_90px] gap-3">
+              <Input value={secretValue} onChange={(event) => setSecretValue(event.target.value)} placeholder="Secret value" className="h-9 border-slate-200 text-xs" />
+              <Button onClick={handleCreateActionSecret} disabled={!secretName.trim() || !secretValue.trim() || saving} className="h-9 bg-sky-600 text-white hover:bg-sky-700">
+                Save
+              </Button>
+            </div>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {actionSecrets.map((secret) => (
+              <div key={secret.name} className="px-5 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-slate-900 truncate">{secret.name}</div>
+                  <div className="text-xs text-slate-400 truncate">{secret.description || 'Secret value hidden'}</div>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => handleDeleteActionSecret(secret.name)} disabled={saving} className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ))}
+            {actionSecrets.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No organization actions secrets</div>}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+            <Workflow className="w-4 h-4 text-slate-500" /> Organization runners
+          </div>
+          <Button onClick={handleCreateRunnerToken} disabled={saving} className="h-8 bg-sky-600 text-white hover:bg-sky-700">
+            <Plus className="w-3.5 h-3.5 mr-2" /> New token
+          </Button>
+        </div>
+        {runnerRegistrationToken && (
+          <div className="px-5 py-3 border-b border-slate-100">
+            <div className="rounded-lg border border-green-200 bg-green-50 p-3 font-mono text-xs text-green-900 break-all">{runnerRegistrationToken}</div>
+          </div>
+        )}
+        <div className="divide-y divide-slate-100">
+          {actionRunners.map((runner) => (
+            <div key={String(runner.id)} className="px-5 py-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-bold text-slate-900 truncate">{runner.name || `Runner ${runner.id}`}</div>
+                <div className="text-xs text-slate-400 truncate">{runner.os || 'unknown'} / {runner.arch || 'unknown'} · {runner.status || 'idle'}</div>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => handleDeleteRunner(runner)} disabled={saving} className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50">
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          ))}
+          {actionRunners.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No organization runners</div>}
+        </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2 text-sm font-bold text-slate-900">
+          <Users className="w-4 h-4 text-slate-500" /> Organization blocks
+        </div>
+        <div className="p-5 space-y-3 border-b border-slate-100">
+          <Input value={blockUsername} onChange={(event) => setBlockUsername(event.target.value)} placeholder="username" className="h-9 border-slate-200 text-xs" />
+          <div className="grid grid-cols-[1fr_90px] gap-3">
+            <Input value={blockNote} onChange={(event) => setBlockNote(event.target.value)} placeholder="Optional note" className="h-9 border-slate-200 text-xs" />
+            <Button onClick={handleBlockUser} disabled={!blockUsername.trim() || saving} className="h-9 bg-sky-600 text-white hover:bg-sky-700">
+              Block
+            </Button>
+          </div>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {blockedUsers.map((user) => {
+            const login = user.login || user.username || '';
+            return (
+              <div key={user.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-slate-900 truncate">{user.full_name || login}</div>
+                  <div className="text-xs text-slate-400 truncate">@{login}</div>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => handleUnblockUser(user)} disabled={saving} className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            );
+          })}
+          {blockedUsers.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No blocked users</div>}
         </div>
       </div>
 

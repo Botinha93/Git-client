@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Building2, Clock, FolderGit2, Play, Plus, Search, Shield, ShieldCheck, Trash2, UserCog, Workflow } from 'lucide-react';
-import { AdminActionJob, AdminActionRun, AdminActionRunner, AdminCronTask, GiteaService, GiteaUser, Organization } from '@/src/lib/gitea';
+import { Award, Building2, Clock, FolderGit2, KeyRound, Mail, Pencil, Play, Plus, Search, Server, Shield, ShieldCheck, Trash2, UserCog, Webhook, Workflow } from 'lucide-react';
+import { AdminActionJob, AdminActionRun, AdminActionRunner, AdminCronTask, EmailAddress, GiteaService, GiteaUser, Hook, Organization, ServerVersion, UserBadge } from '@/src/lib/gitea';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -25,17 +25,27 @@ export function AdminView({ gitea }: AdminViewProps) {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [unadoptedRepos, setUnadoptedRepos] = useState<string[]>([]);
   const [cronTasks, setCronTasks] = useState<AdminCronTask[]>([]);
+  const [emails, setEmails] = useState<EmailAddress[]>([]);
+  const [adminHooks, setAdminHooks] = useState<Hook[]>([]);
   const [runners, setRunners] = useState<AdminActionRunner[]>([]);
   const [jobs, setJobs] = useState<AdminActionJob[]>([]);
   const [runs, setRuns] = useState<AdminActionRun[]>([]);
+  const [serverVersion, setServerVersion] = useState<ServerVersion | null>(null);
+  const [signingKey, setSigningKey] = useState('');
   const [registrationToken, setRegistrationToken] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [orgSearchQuery, setOrgSearchQuery] = useState('');
   const [unadoptedSearchQuery, setUnadoptedSearchQuery] = useState('');
+  const [emailSearchQuery, setEmailSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [isUserDialogOpen, setIsUserDialogOpen] = useState(false);
   const [isOrganizationDialogOpen, setIsOrganizationDialogOpen] = useState(false);
+  const [isHookDialogOpen, setIsHookDialogOpen] = useState(false);
+  const [isBadgeDialogOpen, setIsBadgeDialogOpen] = useState(false);
+  const [editingHook, setEditingHook] = useState<Hook | null>(null);
+  const [selectedBadgeUser, setSelectedBadgeUser] = useState<GiteaUser | null>(null);
+  const [selectedUserBadges, setSelectedUserBadges] = useState<UserBadge[]>([]);
   const [newUsername, setNewUsername] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -46,6 +56,15 @@ export function AdminView({ gitea }: AdminViewProps) {
   const [orgDescription, setOrgDescription] = useState('');
   const [orgWebsite, setOrgWebsite] = useState('');
   const [orgLocation, setOrgLocation] = useState('');
+  const [hookType, setHookType] = useState('gitea');
+  const [hookUrl, setHookUrl] = useState('');
+  const [hookContentType, setHookContentType] = useState('json');
+  const [hookSecret, setHookSecret] = useState('');
+  const [hookEvents, setHookEvents] = useState('push,pull_request');
+  const [hookBranchFilter, setHookBranchFilter] = useState('');
+  const [hookAuthorizationHeader, setHookAuthorizationHeader] = useState('');
+  const [hookActive, setHookActive] = useState(true);
+  const [badgeSlugInput, setBadgeSlugInput] = useState('');
 
   useEffect(() => {
     loadAdminData();
@@ -53,11 +72,14 @@ export function AdminView({ gitea }: AdminViewProps) {
 
   const loadAdminData = async () => {
     setLoading(true);
-    const [usersResult, orgsResult, unadoptedResult, cronResult] = await Promise.allSettled([
+    const [usersResult, orgsResult, unadoptedResult, cronResult, versionResult, signingKeyResult, hooksResult] = await Promise.allSettled([
       gitea.getAdminUsers({ limit: 100 }),
       gitea.getAdminOrganizations({ limit: 100 }),
       gitea.getAdminUnadoptedRepositories({ limit: 100 }),
       gitea.getAdminCronTasks({ limit: 100 }),
+      gitea.getServerVersion(),
+      gitea.getSigningKey(),
+      gitea.getAdminHooks({ limit: 100, type: 'all' }),
     ]);
     const [runnerResult, jobResult, runResult] = await Promise.allSettled([
       gitea.getAdminActionRunners(),
@@ -68,6 +90,9 @@ export function AdminView({ gitea }: AdminViewProps) {
     if (orgsResult.status === 'fulfilled') setOrganizations(orgsResult.value);
     if (unadoptedResult.status === 'fulfilled') setUnadoptedRepos(unadoptedResult.value);
     if (cronResult.status === 'fulfilled') setCronTasks(cronResult.value);
+    if (versionResult.status === 'fulfilled') setServerVersion(versionResult.value);
+    if (signingKeyResult.status === 'fulfilled') setSigningKey(signingKeyResult.value);
+    if (hooksResult.status === 'fulfilled') setAdminHooks(hooksResult.value);
     if (runnerResult.status === 'fulfilled') setRunners(runnerResult.value.runners || []);
     if (jobResult.status === 'fulfilled') setJobs(jobResult.value.jobs || []);
     if (runResult.status === 'fulfilled') setRuns(runResult.value.workflow_runs || []);
@@ -93,6 +118,11 @@ export function AdminView({ gitea }: AdminViewProps) {
     const query = unadoptedSearchQuery.toLowerCase();
     return unadoptedRepos.filter((entry) => entry.toLowerCase().includes(query));
   }, [unadoptedRepos, unadoptedSearchQuery]);
+
+  const filteredEmails = useMemo(() => {
+    const query = emailSearchQuery.toLowerCase();
+    return emails.filter((email) => [email.email, email.username].join(' ').toLowerCase().includes(query));
+  }, [emails, emailSearchQuery]);
 
   const handleCreateUser = async () => {
     if (!newUsername.trim() || !newEmail.trim() || !newPassword) return;
@@ -142,6 +172,144 @@ export function AdminView({ gitea }: AdminViewProps) {
       setIsOrganizationDialogOpen(false);
     } catch (error) {
       console.error('Failed to create organization:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resetHookForm = () => {
+    setEditingHook(null);
+    setHookType('gitea');
+    setHookUrl('');
+    setHookContentType('json');
+    setHookSecret('');
+    setHookEvents('push,pull_request');
+    setHookBranchFilter('');
+    setHookAuthorizationHeader('');
+    setHookActive(true);
+  };
+
+  const openHookEditor = (hook?: Hook) => {
+    if (!hook) {
+      resetHookForm();
+      setIsHookDialogOpen(true);
+      return;
+    }
+    setEditingHook(hook);
+    setHookType(hook.type || 'gitea');
+    setHookUrl(hook.config?.url || '');
+    setHookContentType(hook.config?.content_type || 'json');
+    setHookSecret(hook.config?.secret || '');
+    setHookEvents((hook.events || []).join(','));
+    setHookBranchFilter(hook.branch_filter || '');
+    setHookAuthorizationHeader(hook.authorization_header || '');
+    setHookActive(hook.active !== false);
+    setIsHookDialogOpen(true);
+  };
+
+  const handleSearchEmails = async () => {
+    setSaving(true);
+    try {
+      const results = await gitea.searchAdminEmails({ q: emailSearchQuery.trim() || undefined, limit: 100 });
+      setEmails(results);
+    } catch (error) {
+      console.error('Failed to search admin emails:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveHook = async () => {
+    if (!hookUrl.trim()) return;
+    setSaving(true);
+    try {
+      const payload = {
+        type: hookType,
+        active: hookActive,
+        branch_filter: hookBranchFilter.trim() || undefined,
+        authorization_header: hookAuthorizationHeader.trim() || undefined,
+        events: hookEvents
+          .split(',')
+          .map((event) => event.trim())
+          .filter(Boolean),
+        config: {
+          url: hookUrl.trim(),
+          content_type: hookContentType.trim() || 'json',
+          ...(hookSecret.trim() ? { secret: hookSecret.trim() } : {}),
+        },
+      };
+      const saved = editingHook
+        ? await gitea.updateAdminHook(editingHook.id, payload)
+        : await gitea.createAdminHook(payload);
+      setAdminHooks(
+        editingHook
+          ? adminHooks.map((hook) => (hook.id === saved.id ? saved : hook))
+          : [saved, ...adminHooks],
+      );
+      resetHookForm();
+      setIsHookDialogOpen(false);
+    } catch (error) {
+      console.error('Failed to save admin hook:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteHook = async (hook: Hook) => {
+    setSaving(true);
+    try {
+      await gitea.deleteAdminHook(hook.id);
+      setAdminHooks(adminHooks.filter((item) => item.id !== hook.id));
+    } catch (error) {
+      console.error('Failed to delete admin hook:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openBadgeManager = async (user: GiteaUser) => {
+    const login = user.login || user.username || '';
+    if (!login) return;
+    setSaving(true);
+    try {
+      const badges = await gitea.getAdminUserBadges(login);
+      setSelectedBadgeUser(user);
+      setSelectedUserBadges(badges);
+      setBadgeSlugInput('');
+      setIsBadgeDialogOpen(true);
+    } catch (error) {
+      console.error('Failed to load user badges:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAddBadges = async () => {
+    const login = selectedBadgeUser?.login || selectedBadgeUser?.username || '';
+    const slugs = badgeSlugInput.split(',').map((slug) => slug.trim()).filter(Boolean);
+    if (!login || slugs.length === 0) return;
+    setSaving(true);
+    try {
+      await gitea.addAdminUserBadges(login, slugs);
+      const badges = await gitea.getAdminUserBadges(login);
+      setSelectedUserBadges(badges);
+      setBadgeSlugInput('');
+    } catch (error) {
+      console.error('Failed to add user badges:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRemoveBadge = async (slug: string) => {
+    const login = selectedBadgeUser?.login || selectedBadgeUser?.username || '';
+    if (!login) return;
+    setSaving(true);
+    try {
+      await gitea.removeAdminUserBadges(login, [slug]);
+      setSelectedUserBadges(selectedUserBadges.filter((badge) => badge.slug !== slug));
+    } catch (error) {
+      console.error('Failed to remove user badge:', error);
     } finally {
       setSaving(false);
     }
@@ -280,6 +448,12 @@ export function AdminView({ gitea }: AdminViewProps) {
             <TabsTrigger value="maintenance" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <FolderGit2 className="w-3.5 h-3.5 mr-2" /> Maintenance
             </TabsTrigger>
+            <TabsTrigger value="instance" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <Server className="w-3.5 h-3.5 mr-2" /> Instance
+            </TabsTrigger>
+            <TabsTrigger value="hooks" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <Webhook className="w-3.5 h-3.5 mr-2" /> Hooks
+            </TabsTrigger>
             <TabsTrigger value="actions" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <Workflow className="w-3.5 h-3.5 mr-2" /> Actions
             </TabsTrigger>
@@ -293,22 +467,56 @@ export function AdminView({ gitea }: AdminViewProps) {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search users" className="h-10 pl-10 border-slate-200" />
               </div>
-              <Dialog open={isUserDialogOpen} onOpenChange={setIsUserDialogOpen}>
-                <DialogTrigger render={<Button className="h-10 bg-sky-600 text-white hover:bg-sky-700"><Plus className="w-4 h-4 mr-2" /> New User</Button>} />
-                <DialogContent className="sm:max-w-xl bg-white">
-                  <DialogHeader><DialogTitle>Create User</DialogTitle></DialogHeader>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Input value={newUsername} onChange={(event) => setNewUsername(event.target.value)} placeholder="Username" className="h-10 border-slate-200" />
-                    <Input value={newEmail} onChange={(event) => setNewEmail(event.target.value)} placeholder="Email" className="h-10 border-slate-200" />
-                    <Input value={newFullName} onChange={(event) => setNewFullName(event.target.value)} placeholder="Full name" className="h-10 border-slate-200" />
-                    <Input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Password" type="password" className="h-10 border-slate-200" />
-                  </div>
-                  <DialogFooter className="bg-white border-slate-100">
-                    <Button variant="outline" onClick={() => setIsUserDialogOpen(false)}>Cancel</Button>
-                    <Button onClick={handleCreateUser} disabled={!newUsername.trim() || !newEmail.trim() || !newPassword || saving} className="bg-sky-600 text-white hover:bg-sky-700">Create User</Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
+              <div className="flex items-center gap-2">
+                <Dialog open={isBadgeDialogOpen} onOpenChange={setIsBadgeDialogOpen}>
+                  <DialogContent className="sm:max-w-xl bg-white">
+                    <DialogHeader><DialogTitle>User Badges</DialogTitle></DialogHeader>
+                    <div className="space-y-4">
+                      <div className="text-sm text-slate-500">{selectedBadgeUser?.login || selectedBadgeUser?.username || 'No user selected'}</div>
+                      <div className="grid grid-cols-[1fr_auto] gap-3">
+                        <Input value={badgeSlugInput} onChange={(event) => setBadgeSlugInput(event.target.value)} placeholder="badge-slug or comma,separated,slugs" className="h-10 border-slate-200" />
+                        <Button onClick={handleAddBadges} disabled={!badgeSlugInput.trim() || saving} className="bg-sky-600 text-white hover:bg-sky-700">Add</Button>
+                      </div>
+                      <div className="divide-y divide-slate-100 rounded-lg border border-slate-100">
+                        {selectedUserBadges.map((badge) => (
+                          <div key={badge.slug} className="px-4 py-3 flex items-center justify-between gap-3">
+                            <div className="min-w-0 flex items-center gap-3">
+                              {badge.image_url ? <img src={badge.image_url} alt="" className="w-8 h-8 rounded border border-slate-200" /> : <Award className="w-4 h-4 text-slate-400" />}
+                              <div className="min-w-0">
+                                <div className="text-sm font-bold text-slate-900 truncate">{badge.slug}</div>
+                                <div className="text-xs text-slate-400 truncate">{badge.description || 'No description'}</div>
+                              </div>
+                            </div>
+                            <Button variant="ghost" size="icon" disabled={saving} onClick={() => handleRemoveBadge(badge.slug)} className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        ))}
+                        {selectedUserBadges.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No badges assigned</div>}
+                      </div>
+                    </div>
+                    <DialogFooter className="bg-white border-slate-100">
+                      <Button variant="outline" onClick={() => setIsBadgeDialogOpen(false)}>Close</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+                <Dialog open={isUserDialogOpen} onOpenChange={setIsUserDialogOpen}>
+                  <DialogTrigger render={<Button className="h-10 bg-sky-600 text-white hover:bg-sky-700"><Plus className="w-4 h-4 mr-2" /> New User</Button>} />
+                  <DialogContent className="sm:max-w-xl bg-white">
+                    <DialogHeader><DialogTitle>Create User</DialogTitle></DialogHeader>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Input value={newUsername} onChange={(event) => setNewUsername(event.target.value)} placeholder="Username" className="h-10 border-slate-200" />
+                      <Input value={newEmail} onChange={(event) => setNewEmail(event.target.value)} placeholder="Email" className="h-10 border-slate-200" />
+                      <Input value={newFullName} onChange={(event) => setNewFullName(event.target.value)} placeholder="Full name" className="h-10 border-slate-200" />
+                      <Input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Password" type="password" className="h-10 border-slate-200" />
+                    </div>
+                    <DialogFooter className="bg-white border-slate-100">
+                      <Button variant="outline" onClick={() => setIsUserDialogOpen(false)}>Cancel</Button>
+                      <Button onClick={handleCreateUser} disabled={!newUsername.trim() || !newEmail.trim() || !newPassword || saving} className="bg-sky-600 text-white hover:bg-sky-700">Create User</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
             </div>
             <ScrollArea className="flex-1">
               <div className="divide-y divide-slate-100">
@@ -322,6 +530,9 @@ export function AdminView({ gitea }: AdminViewProps) {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" disabled={saving} onClick={() => openBadgeManager(user)} className="h-8 border-slate-200 text-xs">
+                        <Award className="w-3.5 h-3.5 mr-2" /> Badges
+                      </Button>
                       <Button variant="outline" size="sm" disabled={saving} onClick={() => handleToggleUser(user, 'active')} className="h-8 border-slate-200 text-xs">
                         {user.active === false ? 'Inactive' : 'Active'}
                       </Button>
@@ -437,6 +648,115 @@ export function AdminView({ gitea }: AdminViewProps) {
                   </div>
                 ))}
                 {filteredUnadoptedRepos.length === 0 && <div className="p-12 text-center text-sm text-slate-400">No unadopted repositories found</div>}
+              </div>
+            </ScrollArea>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="instance" className="flex-1 overflow-hidden m-0">
+          <ScrollArea className="h-full">
+            <div className="p-8 max-w-6xl mx-auto space-y-6">
+              <div className="grid grid-cols-2 gap-6">
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                    <Server className="w-4 h-4 text-slate-500" /> Version
+                  </div>
+                  <div className="mt-3 text-2xl font-bold text-slate-900">{serverVersion?.version || 'Unknown'}</div>
+                  <div className="mt-2 text-xs text-slate-500">Live instance version reported by the API.</div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                    <KeyRound className="w-4 h-4 text-slate-500" /> Signing key
+                  </div>
+                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] leading-5 text-slate-700 max-h-60 overflow-auto whitespace-pre-wrap">
+                    {signingKey || 'No signing key returned'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                    <Mail className="w-4 h-4 text-slate-500" /> Email search
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="relative w-80">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <Input value={emailSearchQuery} onChange={(event) => setEmailSearchQuery(event.target.value)} placeholder="Search emails or usernames" className="h-10 pl-10 border-slate-200" />
+                    </div>
+                    <Button variant="outline" onClick={handleSearchEmails} disabled={saving} className="h-10 border-slate-200 text-slate-600">Search</Button>
+                  </div>
+                </div>
+                <div className="divide-y divide-slate-100">
+                  {filteredEmails.map((email) => (
+                    <div key={`${email.email}-${email.username || 'unknown'}`} className="px-5 py-4 flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-slate-900 truncate">{email.email}</div>
+                        <div className="mt-1 text-xs text-slate-500 truncate">{email.username ? `@${email.username}` : 'Unassigned email record'}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {email.primary && <Badge className="bg-slate-900 text-white text-[10px]">Primary</Badge>}
+                        <Badge className={email.verified ? 'bg-emerald-600 text-white text-[10px]' : 'bg-amber-500 text-white text-[10px]'}>
+                          {email.verified ? 'Verified' : 'Unverified'}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredEmails.length === 0 && <div className="p-12 text-center text-sm text-slate-400">Run a search to inspect email records</div>}
+                </div>
+              </div>
+            </div>
+          </ScrollArea>
+        </TabsContent>
+
+        <TabsContent value="hooks" className="flex-1 overflow-hidden m-0">
+          <div className="h-full flex flex-col">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between gap-4">
+              <div className="text-sm text-slate-500">System and default hooks configured at the instance level.</div>
+              <Dialog open={isHookDialogOpen} onOpenChange={setIsHookDialogOpen}>
+                <DialogTrigger render={<Button className="h-10 bg-sky-600 text-white hover:bg-sky-700" onClick={() => openHookEditor()}><Plus className="w-4 h-4 mr-2" /> New Hook</Button>} />
+                <DialogContent className="sm:max-w-2xl bg-white">
+                  <DialogHeader><DialogTitle>{editingHook ? 'Edit Hook' : 'Create Hook'}</DialogTitle></DialogHeader>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input value={hookType} onChange={(event) => setHookType(event.target.value)} placeholder="Hook type" className="h-10 border-slate-200" />
+                    <Input value={hookContentType} onChange={(event) => setHookContentType(event.target.value)} placeholder="Content type" className="h-10 border-slate-200" />
+                    <Input value={hookUrl} onChange={(event) => setHookUrl(event.target.value)} placeholder="Target URL" className="h-10 border-slate-200 col-span-2" />
+                    <Input value={hookSecret} onChange={(event) => setHookSecret(event.target.value)} placeholder="Secret" className="h-10 border-slate-200" />
+                    <Input value={hookAuthorizationHeader} onChange={(event) => setHookAuthorizationHeader(event.target.value)} placeholder="Authorization header" className="h-10 border-slate-200" />
+                    <Input value={hookEvents} onChange={(event) => setHookEvents(event.target.value)} placeholder="Events, comma separated" className="h-10 border-slate-200 col-span-2" />
+                    <Input value={hookBranchFilter} onChange={(event) => setHookBranchFilter(event.target.value)} placeholder="Branch filter" className="h-10 border-slate-200" />
+                    <Button type="button" variant={hookActive ? 'default' : 'outline'} onClick={() => setHookActive(!hookActive)} className={hookActive ? 'h-10 bg-slate-900 text-white hover:bg-slate-800' : 'h-10 border-slate-200 text-slate-600'}>
+                      {hookActive ? 'Active' : 'Inactive'}
+                    </Button>
+                  </div>
+                  <DialogFooter className="bg-white border-slate-100">
+                    <Button variant="outline" onClick={() => setIsHookDialogOpen(false)}>Cancel</Button>
+                    <Button onClick={handleSaveHook} disabled={!hookUrl.trim() || saving} className="bg-sky-600 text-white hover:bg-sky-700">{editingHook ? 'Save Hook' : 'Create Hook'}</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+            <ScrollArea className="flex-1">
+              <div className="p-8 max-w-6xl mx-auto space-y-3">
+                {adminHooks.map((hook) => (
+                  <div key={hook.id} className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-slate-900 truncate">{hook.type} hook #{hook.id}</div>
+                      <div className="mt-1 text-xs text-slate-500 truncate">{hook.config?.url || 'No target URL'}{hook.branch_filter ? ` · ${hook.branch_filter}` : ''}</div>
+                      <div className="mt-1 text-[10px] text-slate-400 truncate">{(hook.events || []).join(', ') || 'No events configured'}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge className={hook.active ? 'bg-emerald-600 text-white text-[10px]' : 'bg-slate-400 text-white text-[10px]'}>{hook.active ? 'Active' : 'Inactive'}</Badge>
+                      <Button variant="ghost" size="icon" disabled={saving} onClick={() => openHookEditor(hook)} className="h-8 w-8 text-slate-400 hover:text-sky-600 hover:bg-sky-50">
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" disabled={saving} onClick={() => handleDeleteHook(hook)} className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {adminHooks.length === 0 && <div className="p-12 text-center text-sm text-slate-400">No system hooks configured</div>}
               </div>
             </ScrollArea>
           </div>

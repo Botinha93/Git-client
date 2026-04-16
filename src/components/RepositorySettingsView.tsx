@@ -5,6 +5,7 @@ import {
   Archive,
   Check,
   ChevronDown,
+  Database,
   GitBranch,
   Globe,
   KeyRound,
@@ -21,8 +22,9 @@ import {
   UserPlus,
   Users,
   Webhook,
+  Workflow,
 } from 'lucide-react';
-import { Branch, BranchProtection, Collaborator, DeployKey, GiteaService, Hook, PushMirror, Repository } from '@/src/lib/gitea';
+import { ActionArtifact, ActionSecret, ActionVariable, ActionWorkflow, AdminActionRun, AdminActionRunner, Branch, BranchProtection, Collaborator, DeployKey, GiteaService, Hook, PushMirror, Repository } from '@/src/lib/gitea';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -64,6 +66,13 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const [deployKeys, setDeployKeys] = useState<DeployKey[]>([]);
   const [pushMirrors, setPushMirrors] = useState<PushMirror[]>([]);
   const [branchProtections, setBranchProtections] = useState<BranchProtection[]>([]);
+  const [actionVariables, setActionVariables] = useState<ActionVariable[]>([]);
+  const [actionSecrets, setActionSecrets] = useState<ActionSecret[]>([]);
+  const [actionArtifacts, setActionArtifacts] = useState<ActionArtifact[]>([]);
+  const [actionWorkflows, setActionWorkflows] = useState<ActionWorkflow[]>([]);
+  const [actionRunners, setActionRunners] = useState<AdminActionRunner[]>([]);
+  const [actionTasks, setActionTasks] = useState<AdminActionRun[]>([]);
+  const [runnerRegistrationToken, setRunnerRegistrationToken] = useState('');
   const [topics, setTopics] = useState<string[]>(repository.topics || []);
   const [description, setDescription] = useState(repository.description || '');
   const [website, setWebsite] = useState(repository.website || '');
@@ -97,6 +106,13 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const [blockRejectedReviews, setBlockRejectedReviews] = useState(true);
   const [transferOwner, setTransferOwner] = useState('');
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [variableName, setVariableName] = useState('');
+  const [variableValue, setVariableValue] = useState('');
+  const [variableDescription, setVariableDescription] = useState('');
+  const [secretName, setSecretName] = useState('');
+  const [secretValue, setSecretValue] = useState('');
+  const [secretDescription, setSecretDescription] = useState('');
+  const [workflowDispatchRef, setWorkflowDispatchRef] = useState(repository.default_branch);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -113,6 +129,7 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
     setSourceBranch(repository.default_branch);
     setRenameBranchSource(repository.default_branch);
     setProtectionBranch(repository.default_branch);
+    setWorkflowDispatchRef(repository.default_branch);
   }, [repository]);
 
   useEffect(() => {
@@ -122,7 +139,7 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const loadSettingsData = async () => {
     setLoading(true);
     try {
-      const [branchData, collaboratorData, hookData, deployKeyData, pushMirrorData, protectionData, topicData] = await Promise.all([
+      const [branchData, collaboratorData, hookData, deployKeyData, pushMirrorData, protectionData, topicData, variableData, secretData, artifactData, workflowData, runnerData, taskData] = await Promise.all([
         gitea.getBranches(owner, repo),
         gitea.getCollaborators(owner, repo),
         gitea.getRepositoryHooks(owner, repo),
@@ -130,6 +147,12 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
         gitea.getPushMirrors(owner, repo),
         gitea.getBranchProtections(owner, repo),
         gitea.getRepositoryTopics(owner, repo),
+        gitea.getRepositoryActionVariables(owner, repo, { limit: 100 }),
+        gitea.getRepositoryActionSecrets(owner, repo, { limit: 100 }),
+        gitea.getRepositoryActionArtifacts(owner, repo),
+        gitea.getRepositoryActionWorkflows(owner, repo),
+        gitea.getRepositoryActionRunners(owner, repo),
+        gitea.getRepositoryActionTasks(owner, repo, { limit: 50 }),
       ]);
       setBranches(branchData);
       setCollaborators(collaboratorData);
@@ -138,6 +161,12 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
       setPushMirrors(pushMirrorData);
       setBranchProtections(protectionData);
       setTopics(topicData.topics || []);
+      setActionVariables(variableData);
+      setActionSecrets(secretData);
+      setActionArtifacts(artifactData.artifacts || []);
+      setActionWorkflows(workflowData.workflows || []);
+      setActionRunners(runnerData.runners || []);
+      setActionTasks(taskData.workflow_runs || []);
       setSourceBranch((current) => current || branchData[0]?.name || repository.default_branch);
       setProtectionBranch((current) => current || repository.default_branch || branchData[0]?.name || '');
     } catch (error) {
@@ -457,6 +486,123 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
       setBranchProtections(branchProtections.filter((protection) => protectionBranchName(protection) !== branchName));
     } catch (error) {
       console.error('Failed to delete branch protection:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreateActionVariable = async () => {
+    if (!variableName.trim() || !variableValue.trim()) return;
+    setSaving(true);
+    try {
+      await gitea.createRepositoryActionVariable(owner, repo, variableName.trim(), {
+        value: variableValue,
+        description: variableDescription.trim() || undefined,
+      });
+      const data = await gitea.getRepositoryActionVariables(owner, repo, { limit: 100 });
+      setActionVariables(data);
+      setVariableName('');
+      setVariableValue('');
+      setVariableDescription('');
+    } catch (error) {
+      console.error('Failed to create repository action variable:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteActionVariable = async (name: string) => {
+    setSaving(true);
+    try {
+      await gitea.deleteRepositoryActionVariable(owner, repo, name);
+      setActionVariables(actionVariables.filter((item) => item.name !== name));
+    } catch (error) {
+      console.error('Failed to delete repository action variable:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreateActionSecret = async () => {
+    if (!secretName.trim() || !secretValue.trim()) return;
+    setSaving(true);
+    try {
+      await gitea.createOrUpdateRepositoryActionSecret(owner, repo, secretName.trim(), {
+        data: secretValue,
+        description: secretDescription.trim() || undefined,
+      });
+      const data = await gitea.getRepositoryActionSecrets(owner, repo, { limit: 100 });
+      setActionSecrets(data);
+      setSecretName('');
+      setSecretValue('');
+      setSecretDescription('');
+    } catch (error) {
+      console.error('Failed to save repository action secret:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteActionSecret = async (name: string) => {
+    setSaving(true);
+    try {
+      await gitea.deleteRepositoryActionSecret(owner, repo, name);
+      setActionSecrets(actionSecrets.filter((item) => item.name !== name));
+    } catch (error) {
+      console.error('Failed to delete repository action secret:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleWorkflow = async (workflow: ActionWorkflow) => {
+    setSaving(true);
+    try {
+      if (workflow.state === 'active') {
+        await gitea.disableRepositoryActionWorkflow(owner, repo, workflow.id);
+      } else {
+        await gitea.enableRepositoryActionWorkflow(owner, repo, workflow.id);
+      }
+      const data = await gitea.getRepositoryActionWorkflows(owner, repo);
+      setActionWorkflows(data.workflows || []);
+    } catch (error) {
+      console.error('Failed to toggle workflow state:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDispatchWorkflow = async (workflow: ActionWorkflow) => {
+    if (!workflowDispatchRef.trim()) return;
+    setSaving(true);
+    try {
+      await gitea.dispatchRepositoryActionWorkflow(owner, repo, workflow.id, { ref: workflowDispatchRef.trim() });
+    } catch (error) {
+      console.error('Failed to dispatch workflow:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreateRunnerToken = async () => {
+    setSaving(true);
+    try {
+      const response = await gitea.createRepositoryActionRunnerRegistrationToken(owner, repo);
+      setRunnerRegistrationToken(response.token);
+    } catch (error) {
+      console.error('Failed to create repository runner registration token:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteRunner = async (runner: AdminActionRunner) => {
+    setSaving(true);
+    try {
+      await gitea.deleteRepositoryActionRunner(owner, repo, runner.id);
+      setActionRunners(actionRunners.filter((item) => String(item.id) !== String(runner.id)));
+    } catch (error) {
+      console.error('Failed to delete repository runner:', error);
     } finally {
       setSaving(false);
     }
@@ -943,6 +1089,213 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
             <Button onClick={handleCreateBranchProtection} disabled={!protectionBranch.trim() || saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
               <ShieldCheck className="w-3.5 h-3.5 mr-2" /> Save Protection
             </Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-[1fr_360px] gap-8">
+          <div className="space-y-8">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+                <Workflow className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Actions variables</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {actionVariables.map((variable) => (
+                  <div key={variable.name} className="px-5 py-4 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-slate-900 truncate">{variable.name}</div>
+                      <div className="text-xs text-slate-400 truncate">{variable.description || 'No description'}</div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={saving}
+                      onClick={() => handleDeleteActionVariable(variable.name)}
+                      className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                ))}
+                {actionVariables.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No actions variables configured</div>}
+              </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Actions secrets</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {actionSecrets.map((secret) => (
+                  <div key={secret.name} className="px-5 py-4 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-slate-900 truncate">{secret.name}</div>
+                      <div className="text-xs text-slate-400 truncate">{secret.description || 'Secret value hidden'}</div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={saving}
+                      onClick={() => handleDeleteActionSecret(secret.name)}
+                      className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                ))}
+                {actionSecrets.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No actions secrets configured</div>}
+              </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+                <Workflow className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Workflows</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {actionWorkflows.map((workflow) => (
+                  <div key={workflow.id} className="px-5 py-4 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-slate-900 truncate">{workflow.name || workflow.id}</span>
+                        <Badge variant="outline" className="border-slate-200 text-slate-500 text-[10px] uppercase">{workflow.state || 'unknown'}</Badge>
+                      </div>
+                      <div className="text-xs text-slate-400 truncate">{workflow.path || workflow.badge_url || 'No path reported'}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" disabled={saving || !workflowDispatchRef.trim()} onClick={() => handleDispatchWorkflow(workflow)} className="h-8 border-slate-200 text-slate-600">
+                        Run
+                      </Button>
+                      <Button variant="outline" size="sm" disabled={saving} onClick={() => handleToggleWorkflow(workflow)} className="h-8 border-slate-200 text-slate-600">
+                        {workflow.state === 'active' ? 'Disable' : 'Enable'}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {actionWorkflows.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No workflows discovered</div>}
+              </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+                <Database className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Artifacts</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {actionArtifacts.map((artifact) => (
+                  <div key={artifact.id} className="px-5 py-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-slate-900 truncate">{artifact.name}</div>
+                        <div className="text-xs text-slate-400 truncate">
+                          {(artifact.size_in_bytes || 0).toLocaleString()} bytes
+                          {artifact.workflow_run?.id ? ` · run #${artifact.workflow_run.id}` : ''}
+                          {artifact.expired ? ' · expired' : ''}
+                        </div>
+                      </div>
+                      {artifact.archive_download_url && (
+                        <a href={artifact.archive_download_url} target="_blank" rel="noreferrer" className="text-xs font-medium text-sky-700 hover:text-sky-800">
+                          Download
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {actionArtifacts.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No artifacts found</div>}
+              </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+                <Workflow className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Action tasks</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {actionTasks.map((task) => (
+                  <div key={task.id} className="px-5 py-4">
+                    <div className="text-sm font-bold text-slate-900 truncate">{task.display_title || task.name || `Run #${task.id}`}</div>
+                    <div className="mt-1 text-xs text-slate-500">{task.status || 'unknown'} {task.event ? `· ${task.event}` : ''}</div>
+                    <div className="mt-1 text-[10px] text-slate-400 truncate">{task.head_branch || 'no branch'} · {task.head_sha?.slice(0, 12) || 'no sha'}</div>
+                  </div>
+                ))}
+                {actionTasks.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No action tasks found</div>}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4 h-fit">
+              <div className="flex items-center gap-2">
+                <Plus className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">New variable</span>
+              </div>
+              <Input value={variableName} onChange={(event) => setVariableName(event.target.value)} placeholder="VARIABLE_NAME" className="h-10 border-slate-200 font-mono text-xs" />
+              <Input value={variableDescription} onChange={(event) => setVariableDescription(event.target.value)} placeholder="Description" className="h-10 border-slate-200 text-xs" />
+              <textarea
+                value={variableValue}
+                onChange={(event) => setVariableValue(event.target.value)}
+                placeholder="Variable value"
+                className="min-h-24 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-sky-100"
+              />
+              <Button onClick={handleCreateActionVariable} disabled={!variableName.trim() || !variableValue.trim() || saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
+                <Plus className="w-3.5 h-3.5 mr-2" /> Save Variable
+              </Button>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4 h-fit">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">New secret</span>
+              </div>
+              <Input value={secretName} onChange={(event) => setSecretName(event.target.value)} placeholder="SECRET_NAME" className="h-10 border-slate-200 font-mono text-xs" />
+              <Input value={secretDescription} onChange={(event) => setSecretDescription(event.target.value)} placeholder="Description" className="h-10 border-slate-200 text-xs" />
+              <textarea
+                value={secretValue}
+                onChange={(event) => setSecretValue(event.target.value)}
+                placeholder="Secret value"
+                className="min-h-24 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-sky-100"
+              />
+              <Button onClick={handleCreateActionSecret} disabled={!secretName.trim() || !secretValue.trim() || saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
+                <Plus className="w-3.5 h-3.5 mr-2" /> Save Secret
+              </Button>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4 h-fit">
+              <div className="flex items-center gap-2">
+                <Workflow className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Workflow dispatch</span>
+              </div>
+              {branchPicker(workflowDispatchRef, setWorkflowDispatchRef)}
+              <div className="text-xs text-slate-400">Pick the ref used when manually dispatching repository workflows.</div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4 h-fit">
+              <div className="flex items-center gap-2">
+                <Workflow className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Repository runners</span>
+              </div>
+              <Button onClick={handleCreateRunnerToken} disabled={saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
+                <Plus className="w-3.5 h-3.5 mr-2" /> New runner token
+              </Button>
+              {runnerRegistrationToken && (
+                <div className="rounded-lg border border-green-200 bg-green-50 p-3 font-mono text-xs text-green-900 break-all">{runnerRegistrationToken}</div>
+              )}
+              <div className="divide-y divide-slate-100 rounded-lg border border-slate-100">
+                {actionRunners.map((runner) => (
+                  <div key={String(runner.id)} className="px-3 py-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-slate-900 truncate">{runner.name || `Runner ${runner.id}`}</div>
+                      <div className="text-xs text-slate-400 truncate">{runner.os || 'unknown'} / {runner.arch || 'unknown'} · {runner.status || 'idle'}</div>
+                    </div>
+                    <Button variant="ghost" size="icon" disabled={saving} onClick={() => handleDeleteRunner(runner)} className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                ))}
+                {actionRunners.length === 0 && <div className="p-6 text-center text-sm text-slate-400">No repository runners configured</div>}
+              </div>
+            </div>
           </div>
         </div>
 
