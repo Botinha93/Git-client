@@ -12,6 +12,8 @@ import { RepoView } from './components/RepoView';
 import { Dashboard } from './components/Dashboard';
 import { ExploreView } from './components/ExploreView';
 import { AccountView } from './components/AccountView';
+import { PackagesView } from './components/PackagesView';
+import { AdminView } from './components/AdminView';
 
 export default function App() {
   const [config, setConfig] = useState<GiteaConfig | null>(() => {
@@ -97,6 +99,20 @@ export default function App() {
           } />
           <Route path="/repo/:owner/:repo" element={<RepoView gitea={gitea!} />} />
           <Route path="/explore" element={<ExploreView gitea={gitea!} />} />
+          <Route path="/packages" element={
+            user ? (
+              <PackagesView gitea={gitea!} user={user} />
+            ) : (
+              <Navigate to="/" />
+            )
+          } />
+          <Route path="/admin" element={
+            user?.is_admin ? (
+              <AdminView gitea={gitea!} />
+            ) : (
+              <Navigate to="/" />
+            )
+          } />
           <Route path="/account" element={
             user ? (
               <AccountView

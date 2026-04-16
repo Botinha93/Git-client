@@ -14,8 +14,10 @@ import {
   History, 
   Layout as LayoutIcon, 
   LogOut, 
+  Package,
   Search, 
   Settings, 
+  Shield,
   Star,
   UserCircle
 } from 'lucide-react';
@@ -86,6 +88,32 @@ export function Layout({ children, repositories, onLogout, user }: LayoutProps) 
               <UserCircle className="w-4 h-4 opacity-70" />
               <span>Account</span>
             </Link>
+            <Link
+              to="/packages"
+              className={cn(
+                "flex items-center gap-3 px-6 py-3 text-sm transition-colors relative",
+                location.pathname === '/packages'
+                  ? "bg-slate-700 text-slate-50 border-l-4 border-sky-400"
+                  : "hover:bg-slate-800 hover:text-slate-50"
+              )}
+            >
+              <Package className="w-4 h-4 opacity-70" />
+              <span>Packages</span>
+            </Link>
+            {user?.is_admin && (
+              <Link
+                to="/admin"
+                className={cn(
+                  "flex items-center gap-3 px-6 py-3 text-sm transition-colors relative",
+                  location.pathname === '/admin'
+                    ? "bg-slate-700 text-slate-50 border-l-4 border-sky-400"
+                    : "hover:bg-slate-800 hover:text-slate-50"
+                )}
+              >
+                <Shield className="w-4 h-4 opacity-70" />
+                <span>Admin</span>
+              </Link>
+            )}
           </div>
           <div className="px-6 mb-2 text-[10px] uppercase tracking-widest opacity-50 font-semibold">
             Repositories

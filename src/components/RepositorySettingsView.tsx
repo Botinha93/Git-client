@@ -10,6 +10,7 @@ import {
   KeyRound,
   Lock,
   Plus,
+  RefreshCw,
   Save,
   Send,
   Settings2,
@@ -21,7 +22,7 @@ import {
   Users,
   Webhook,
 } from 'lucide-react';
-import { Branch, BranchProtection, Collaborator, DeployKey, GiteaService, Hook, Repository } from '@/src/lib/gitea';
+import { Branch, BranchProtection, Collaborator, DeployKey, GiteaService, Hook, PushMirror, Repository } from '@/src/lib/gitea';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -61,6 +62,7 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [hooks, setHooks] = useState<Hook[]>([]);
   const [deployKeys, setDeployKeys] = useState<DeployKey[]>([]);
+  const [pushMirrors, setPushMirrors] = useState<PushMirror[]>([]);
   const [branchProtections, setBranchProtections] = useState<BranchProtection[]>([]);
   const [topics, setTopics] = useState<string[]>(repository.topics || []);
   const [description, setDescription] = useState(repository.description || '');
@@ -73,6 +75,8 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const [hasPullRequests, setHasPullRequests] = useState(repository.has_pull_requests ?? true);
   const [newBranchName, setNewBranchName] = useState('');
   const [sourceBranch, setSourceBranch] = useState(repository.default_branch);
+  const [renameBranchSource, setRenameBranchSource] = useState(repository.default_branch);
+  const [renameBranchTarget, setRenameBranchTarget] = useState('');
   const [newCollaborator, setNewCollaborator] = useState('');
   const [newPermission, setNewPermission] = useState<Permission>('write');
   const [topicInput, setTopicInput] = useState('');
@@ -82,6 +86,11 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const [deployKeyTitle, setDeployKeyTitle] = useState('');
   const [deployKeyValue, setDeployKeyValue] = useState('');
   const [deployKeyReadOnly, setDeployKeyReadOnly] = useState(true);
+  const [mirrorRemoteAddress, setMirrorRemoteAddress] = useState('');
+  const [mirrorUsername, setMirrorUsername] = useState('');
+  const [mirrorPassword, setMirrorPassword] = useState('');
+  const [mirrorInterval, setMirrorInterval] = useState('8h0m0s');
+  const [mirrorSyncOnCommit, setMirrorSyncOnCommit] = useState(true);
   const [protectionBranch, setProtectionBranch] = useState(repository.default_branch);
   const [requiredApprovals, setRequiredApprovals] = useState('1');
   const [requireSignedCommits, setRequireSignedCommits] = useState(false);
@@ -102,6 +111,7 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
     setHasPullRequests(repository.has_pull_requests ?? true);
     setTopics(repository.topics || []);
     setSourceBranch(repository.default_branch);
+    setRenameBranchSource(repository.default_branch);
     setProtectionBranch(repository.default_branch);
   }, [repository]);
 
@@ -112,11 +122,12 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const loadSettingsData = async () => {
     setLoading(true);
     try {
-      const [branchData, collaboratorData, hookData, deployKeyData, protectionData, topicData] = await Promise.all([
+      const [branchData, collaboratorData, hookData, deployKeyData, pushMirrorData, protectionData, topicData] = await Promise.all([
         gitea.getBranches(owner, repo),
         gitea.getCollaborators(owner, repo),
         gitea.getRepositoryHooks(owner, repo),
         gitea.getDeployKeys(owner, repo),
+        gitea.getPushMirrors(owner, repo),
         gitea.getBranchProtections(owner, repo),
         gitea.getRepositoryTopics(owner, repo),
       ]);
@@ -124,6 +135,7 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
       setCollaborators(collaboratorData);
       setHooks(hookData);
       setDeployKeys(deployKeyData);
+      setPushMirrors(pushMirrorData);
       setBranchProtections(protectionData);
       setTopics(topicData.topics || []);
       setSourceBranch((current) => current || branchData[0]?.name || repository.default_branch);
@@ -183,6 +195,24 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
       if (sourceBranch === branchName) setSourceBranch(repository.default_branch);
     } catch (error) {
       console.error('Failed to delete branch:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRenameBranch = async () => {
+    if (!renameBranchSource.trim() || !renameBranchTarget.trim()) return;
+    setSaving(true);
+    try {
+      await gitea.renameBranch(owner, repo, renameBranchSource, renameBranchTarget.trim());
+      const data = await gitea.getBranches(owner, repo);
+      setBranches(data);
+      if (defaultBranch === renameBranchSource) setDefaultBranch(renameBranchTarget.trim());
+      if (sourceBranch === renameBranchSource) setSourceBranch(renameBranchTarget.trim());
+      setRenameBranchSource(renameBranchTarget.trim());
+      setRenameBranchTarget('');
+    } catch (error) {
+      console.error('Failed to rename branch:', error);
     } finally {
       setSaving(false);
     }
@@ -335,6 +365,64 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
       setDeployKeys(deployKeys.filter((key) => key.id !== id));
     } catch (error) {
       console.error('Failed to delete deploy key:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreatePushMirror = async () => {
+    if (!mirrorRemoteAddress.trim()) return;
+    setSaving(true);
+    try {
+      const mirror = await gitea.createPushMirror(owner, repo, {
+        remote_address: mirrorRemoteAddress.trim(),
+        remote_username: mirrorUsername.trim() || undefined,
+        remote_password: mirrorPassword || undefined,
+        interval: mirrorInterval.trim() || undefined,
+        sync_on_commit: mirrorSyncOnCommit,
+      });
+      setPushMirrors([...pushMirrors, mirror]);
+      setMirrorRemoteAddress('');
+      setMirrorUsername('');
+      setMirrorPassword('');
+    } catch (error) {
+      console.error('Failed to create push mirror:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeletePushMirror = async (mirror: PushMirror) => {
+    setSaving(true);
+    try {
+      await gitea.deletePushMirror(owner, repo, mirror.remote_name);
+      setPushMirrors(pushMirrors.filter((item) => item.remote_name !== mirror.remote_name));
+    } catch (error) {
+      console.error('Failed to delete push mirror:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSyncPushMirrors = async () => {
+    setSaving(true);
+    try {
+      await gitea.syncPushMirrors(owner, repo);
+      const mirrors = await gitea.getPushMirrors(owner, repo);
+      setPushMirrors(mirrors);
+    } catch (error) {
+      console.error('Failed to sync push mirrors:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSyncPullMirror = async () => {
+    setSaving(true);
+    try {
+      await gitea.syncMirror(owner, repo);
+    } catch (error) {
+      console.error('Failed to sync mirrored repository:', error);
     } finally {
       setSaving(false);
     }
@@ -562,6 +650,14 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
             <Button onClick={handleCreateBranch} disabled={!newBranchName.trim() || saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
               <GitBranch className="w-3.5 h-3.5 mr-2" /> Create Branch
             </Button>
+            <div className="border-t border-slate-100 pt-4 space-y-3">
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Rename branch</div>
+              {branchPicker(renameBranchSource, setRenameBranchSource)}
+              <Input value={renameBranchTarget} onChange={(event) => setRenameBranchTarget(event.target.value)} placeholder="new-branch-name" className="h-10 border-slate-200 font-mono text-xs" />
+              <Button onClick={handleRenameBranch} disabled={!renameBranchSource.trim() || !renameBranchTarget.trim() || saving} variant="outline" className="w-full border-slate-200 text-slate-700">
+                Rename Branch
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -624,6 +720,66 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
             </DropdownMenu>
             <Button onClick={handleAddCollaborator} disabled={!newCollaborator.trim() || saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
               <UserPlus className="w-3.5 h-3.5 mr-2" /> Add Collaborator
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-[1fr_360px] gap-8">
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+            <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Push mirrors</span>
+              </div>
+              <Button variant="outline" size="sm" onClick={handleSyncPushMirrors} disabled={saving || pushMirrors.length === 0} className="h-8 border-slate-200 text-slate-600">
+                Sync all
+              </Button>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {pushMirrors.map((mirror) => (
+                <div key={mirror.remote_name} className="px-5 py-4 flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-slate-900 truncate">{mirror.remote_name}</span>
+                      {mirror.sync_on_commit && <Badge variant="outline" className="border-sky-100 text-sky-700 text-[10px]">Push sync</Badge>}
+                    </div>
+                    <div className="text-xs text-slate-400 truncate">{mirror.remote_address}</div>
+                    {mirror.last_error && <div className="mt-1 text-xs text-red-500 truncate">{mirror.last_error}</div>}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={saving}
+                    onClick={() => handleDeletePushMirror(mirror)}
+                    className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              ))}
+              {pushMirrors.length === 0 && (
+                <div className="p-8 text-center text-sm text-slate-400">No push mirrors configured</div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4 h-fit">
+            <div className="flex items-center gap-2">
+              <Send className="w-4 h-4 text-slate-500" />
+              <span className="text-sm font-bold text-slate-900">Add mirror</span>
+            </div>
+            <Input value={mirrorRemoteAddress} onChange={(event) => setMirrorRemoteAddress(event.target.value)} placeholder="https://example.com/owner/repo.git" className="h-10 border-slate-200 text-xs" />
+            <div className="grid grid-cols-2 gap-2">
+              <Input value={mirrorUsername} onChange={(event) => setMirrorUsername(event.target.value)} placeholder="Username" className="h-10 border-slate-200 text-xs" />
+              <Input value={mirrorPassword} onChange={(event) => setMirrorPassword(event.target.value)} placeholder="Password/token" type="password" className="h-10 border-slate-200 text-xs" />
+            </div>
+            <Input value={mirrorInterval} onChange={(event) => setMirrorInterval(event.target.value)} placeholder="8h0m0s" className="h-10 border-slate-200 text-xs" />
+            {toggleButton(mirrorSyncOnCommit, () => setMirrorSyncOnCommit(!mirrorSyncOnCommit), <RefreshCw className="w-3.5 h-3.5 mr-2" />, 'Sync on commit')}
+            <Button onClick={handleCreatePushMirror} disabled={!mirrorRemoteAddress.trim() || saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
+              <Plus className="w-3.5 h-3.5 mr-2" /> Add Push Mirror
+            </Button>
+            <Button variant="outline" onClick={handleSyncPullMirror} disabled={saving} className="w-full border-slate-200 text-slate-700">
+              <RefreshCw className="w-3.5 h-3.5 mr-2" /> Sync Pull Mirror
             </Button>
           </div>
         </div>

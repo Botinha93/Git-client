@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Bell,
   Check,
+  ExternalLink,
   EyeOff,
   Folder,
   GitCommit,
@@ -27,6 +28,7 @@ import {
   GiteaUser,
   GpgKey,
   NotificationThread,
+  OAuth2Application,
   PublicKey,
   Repository,
   Stopwatch,
@@ -66,6 +68,7 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
   const [emails, setEmails] = useState<EmailAddress[]>([]);
   const [gpgKeys, setGpgKeys] = useState<GpgKey[]>([]);
   const [tokens, setTokens] = useState<AccessToken[]>([]);
+  const [oauthApps, setOauthApps] = useState<OAuth2Application[]>([]);
   const [followers, setFollowers] = useState<GiteaUser[]>([]);
   const [following, setFollowing] = useState<GiteaUser[]>([]);
   const [starredRepos, setStarredRepos] = useState<Repository[]>([]);
@@ -78,12 +81,18 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
   const [isEmailDialogOpen, setIsEmailDialogOpen] = useState(false);
   const [isGpgDialogOpen, setIsGpgDialogOpen] = useState(false);
   const [isTokenDialogOpen, setIsTokenDialogOpen] = useState(false);
+  const [isOauthDialogOpen, setIsOauthDialogOpen] = useState(false);
+  const [editingOauthApp, setEditingOauthApp] = useState<OAuth2Application | null>(null);
   const [keyTitle, setKeyTitle] = useState('');
   const [keyValue, setKeyValue] = useState('');
   const [emailValue, setEmailValue] = useState('');
   const [gpgValue, setGpgValue] = useState('');
   const [followUserValue, setFollowUserValue] = useState('');
   const [tokenName, setTokenName] = useState('');
+  const [oauthName, setOauthName] = useState('');
+  const [oauthRedirectUris, setOauthRedirectUris] = useState('');
+  const [oauthConfidential, setOauthConfidential] = useState(true);
+  const [newOauthSecret, setNewOauthSecret] = useState('');
 
   useEffect(() => {
     setProfile(user);
@@ -102,6 +111,7 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
       notificationResult,
       keyResult,
       tokenResult,
+      oauthResult,
       emailResult,
       gpgResult,
       followersResult,
@@ -113,6 +123,7 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
       gitea.getNotifications({ all: true, limit: 50 }),
       gitea.getPublicKeys(),
       username ? gitea.getAccessTokens(username) : Promise.resolve([]),
+      gitea.getOAuth2Applications({ limit: 50 }),
       gitea.getEmails(),
       gitea.getGpgKeys(),
       gitea.getFollowers(),
@@ -124,6 +135,7 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
     if (notificationResult.status === 'fulfilled') setNotifications(notificationResult.value);
     if (keyResult.status === 'fulfilled') setKeys(keyResult.value);
     if (tokenResult.status === 'fulfilled') setTokens(tokenResult.value);
+    if (oauthResult.status === 'fulfilled') setOauthApps(oauthResult.value);
     if (emailResult.status === 'fulfilled') setEmails(emailResult.value);
     if (gpgResult.status === 'fulfilled') setGpgKeys(gpgResult.value);
     if (followersResult.status === 'fulfilled') setFollowers(followersResult.value);
@@ -265,6 +277,68 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
     }
   };
 
+  const resetOauthForm = () => {
+    setEditingOauthApp(null);
+    setOauthName('');
+    setOauthRedirectUris('');
+    setOauthConfidential(true);
+  };
+
+  const openOauthEditor = (app?: OAuth2Application) => {
+    if (app) {
+      setEditingOauthApp(app);
+      setOauthName(app.name);
+      setOauthRedirectUris(app.redirect_uris.join('\n'));
+      setOauthConfidential(app.confidential_client ?? true);
+    } else {
+      resetOauthForm();
+    }
+    setIsOauthDialogOpen(true);
+  };
+
+  const redirectUriList = () => oauthRedirectUris
+    .split(/[\n,]/)
+    .map((uri) => uri.trim())
+    .filter(Boolean);
+
+  const handleSaveOAuthApp = async () => {
+    const redirect_uris = redirectUriList();
+    if (!oauthName.trim() || redirect_uris.length === 0) return;
+    setSaving(true);
+    try {
+      const data = {
+        name: oauthName.trim(),
+        redirect_uris,
+        confidential_client: oauthConfidential,
+      };
+      const app = editingOauthApp
+        ? await gitea.updateOAuth2Application(editingOauthApp.id, data)
+        : await gitea.createOAuth2Application(data);
+      setOauthApps(editingOauthApp
+        ? oauthApps.map((item) => item.id === app.id ? app : item)
+        : [app, ...oauthApps]);
+      setNewOauthSecret(app.client_secret || '');
+      resetOauthForm();
+      setIsOauthDialogOpen(false);
+    } catch (error) {
+      console.error('Failed to save OAuth application:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteOAuthApp = async (id: number) => {
+    setSaving(true);
+    try {
+      await gitea.deleteOAuth2Application(id);
+      setOauthApps(oauthApps.filter((app) => app.id !== id));
+    } catch (error) {
+      console.error('Failed to delete OAuth application:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleFollowUser = async () => {
     if (!followUserValue.trim()) return;
     setSaving(true);
@@ -361,6 +435,9 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
             </TabsTrigger>
             <TabsTrigger value="tokens" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <LockKeyhole className="w-3.5 h-3.5 mr-2" /> Tokens
+            </TabsTrigger>
+            <TabsTrigger value="applications" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <ExternalLink className="w-3.5 h-3.5 mr-2" /> Apps
             </TabsTrigger>
           </TabsList>
         </div>
@@ -709,6 +786,86 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
                   </div>
                 ))}
                 {tokens.length === 0 && <div className="p-12 text-center text-sm text-slate-400">No access tokens found</div>}
+              </div>
+            </ScrollArea>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="applications" className="flex-1 overflow-hidden m-0">
+          <div className="h-full flex flex-col">
+            <div className="p-4 border-b border-slate-200 flex justify-end">
+              <Dialog open={isOauthDialogOpen} onOpenChange={(open) => {
+                setIsOauthDialogOpen(open);
+                if (!open) resetOauthForm();
+              }}>
+                <DialogTrigger render={
+                  <Button onClick={() => openOauthEditor()} className="h-8 bg-sky-600 text-white hover:bg-sky-700">
+                    <Plus className="w-3.5 h-3.5 mr-2" /> New OAuth App
+                  </Button>
+                } />
+                <DialogContent className="sm:max-w-xl bg-white">
+                  <DialogHeader><DialogTitle>{editingOauthApp ? 'Update OAuth Application' : 'Create OAuth Application'}</DialogTitle></DialogHeader>
+                  <div className="space-y-4">
+                    <Input value={oauthName} onChange={(event) => setOauthName(event.target.value)} placeholder="Application name" className="h-10 border-slate-200" />
+                    <textarea
+                      value={oauthRedirectUris}
+                      onChange={(event) => setOauthRedirectUris(event.target.value)}
+                      placeholder="https://example.com/callback"
+                      className="h-32 w-full rounded-lg border border-slate-200 p-3 text-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setOauthConfidential(!oauthConfidential)}
+                      className={`w-full justify-start border-slate-200 ${oauthConfidential ? 'bg-sky-50 text-sky-700 border-sky-100' : 'text-slate-600'}`}
+                    >
+                      <LockKeyhole className="w-3.5 h-3.5 mr-2" />
+                      Confidential client
+                      {oauthConfidential && <Check className="ml-auto w-3.5 h-3.5" />}
+                    </Button>
+                  </div>
+                  <DialogFooter className="bg-white border-slate-100">
+                    <Button variant="outline" onClick={() => setIsOauthDialogOpen(false)}>Cancel</Button>
+                    <Button onClick={handleSaveOAuthApp} disabled={!oauthName.trim() || redirectUriList().length === 0 || saving} className="bg-sky-600 text-white hover:bg-sky-700">
+                      {editingOauthApp ? 'Update App' : 'Create App'}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+            <ScrollArea className="flex-1">
+              <div className="p-8 max-w-5xl mx-auto space-y-4">
+                {newOauthSecret && (
+                  <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+                    <div className="text-sm font-bold text-green-800">OAuth client secret</div>
+                    <div className="mt-2 font-mono text-xs text-green-900 break-all">{newOauthSecret}</div>
+                  </div>
+                )}
+                {oauthApps.map((app) => (
+                  <div key={app.id} className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-bold text-slate-900 truncate">{app.name}</div>
+                        {app.confidential_client && <Badge className="bg-slate-900 text-white text-[10px]">Confidential</Badge>}
+                      </div>
+                      <div className="mt-2 font-mono text-xs text-slate-500 break-all">{app.client_id}</div>
+                      <div className="mt-3 space-y-1">
+                        {app.redirect_uris.map((uri) => (
+                          <div key={uri} className="text-xs text-slate-500 truncate">{uri}</div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button variant="outline" size="sm" disabled={saving} onClick={() => openOauthEditor(app)} className="h-8 border-slate-200 text-slate-600">
+                        Edit
+                      </Button>
+                      <Button variant="ghost" size="icon" disabled={saving} onClick={() => handleDeleteOAuthApp(app.id)} className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {oauthApps.length === 0 && <div className="p-12 text-center text-sm text-slate-400">No OAuth applications found</div>}
               </div>
             </ScrollArea>
           </div>

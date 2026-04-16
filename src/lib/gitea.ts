@@ -74,6 +74,47 @@ export interface GitTree {
   tree: GitTreeItem[];
 }
 
+export interface GitBlob {
+  content: string;
+  encoding: string;
+  sha: string;
+  size: number;
+  url: string;
+}
+
+export interface GitRef {
+  ref: string;
+  url: string;
+  object: {
+    type: string;
+    sha: string;
+    url: string;
+  };
+}
+
+export interface GitAnnotatedTag {
+  tag: string;
+  sha: string;
+  url: string;
+  message: string;
+  object: {
+    type: string;
+    sha: string;
+    url: string;
+  };
+  tagger?: {
+    name: string;
+    email: string;
+    date: string;
+  };
+  verification?: {
+    verified: boolean;
+    reason?: string;
+    signature?: string;
+    payload?: string;
+  };
+}
+
 export interface Commit {
   sha: string;
   commit: {
@@ -97,10 +138,20 @@ export interface Commit {
     login: string;
     avatar_url: string;
   };
+  committer?: {
+    login: string;
+    avatar_url: string;
+  };
   parents: {
     sha: string;
     url: string;
   }[];
+  files?: PullRequestFile[];
+  stats?: {
+    total: number;
+    additions: number;
+    deletions: number;
+  };
 }
 
 export type CommitStatusState = 'pending' | 'success' | 'error' | 'failure' | 'warning';
@@ -136,6 +187,16 @@ export interface CompareResult {
   permalink_url?: string;
   base_commit?: Commit;
   merge_base_commit?: Commit;
+}
+
+export interface ActivityFeed {
+  id: number;
+  op_type: string;
+  act_user?: GiteaUser;
+  repo?: Repository;
+  ref_name?: string;
+  content?: string;
+  created: string;
 }
 
 export interface Issue {
@@ -297,6 +358,29 @@ export interface Release {
   assets: ReleaseAsset[];
 }
 
+export interface PackageFile {
+  id: number;
+  name: string;
+  size?: number;
+  Size?: number;
+  md5?: string;
+  sha1?: string;
+  sha256?: string;
+  sha512?: string;
+}
+
+export interface PackageVersion {
+  id: number;
+  type: string;
+  name: string;
+  version: string;
+  html_url?: string;
+  metadata?: Record<string, any>;
+  creator?: GiteaUser;
+  repository?: Repository;
+  created_at: string;
+}
+
 export interface RepositoryTag {
   id?: string;
   name: string;
@@ -380,8 +464,67 @@ export interface GiteaUser {
   location?: string;
   language?: string;
   visibility?: string;
+  active?: boolean;
+  is_admin?: boolean;
+  restricted?: boolean;
+  prohibit_login?: boolean;
+  login_name?: string;
+  source_id?: number;
+  max_repo_creation?: number;
+  allow_create_organization?: boolean;
+  allow_git_hook?: boolean;
+  allow_import_local?: boolean;
   created?: string;
   last_login?: string;
+}
+
+export interface AdminCronTask {
+  name: string;
+  schedule?: string;
+  next?: string;
+  prev?: string;
+  exec_times?: number;
+  status?: string;
+}
+
+export interface AdminActionRunner {
+  id: number | string;
+  name?: string;
+  os?: string;
+  arch?: string;
+  version?: string;
+  description?: string;
+  status?: string;
+  busy?: boolean;
+  labels?: string[];
+}
+
+export interface AdminActionJob {
+  id: number;
+  name: string;
+  status?: string;
+  conclusion?: string;
+  head_branch?: string;
+  head_sha?: string;
+  run_id?: number;
+  runner_id?: number;
+  runner_name?: string;
+  created_at?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface AdminActionRun {
+  id: number;
+  display_title?: string;
+  event?: string;
+  status?: string;
+  conclusion?: string;
+  head_branch?: string;
+  head_sha?: string;
+  created_at?: string;
+  updated_at?: string;
+  run_number?: number;
 }
 
 export interface Collaborator extends GiteaUser {
@@ -442,6 +585,17 @@ export interface DeployKey {
   created_at: string;
 }
 
+export interface PushMirror {
+  repo_name: string;
+  remote_name: string;
+  remote_address: string;
+  interval: string;
+  sync_on_commit: boolean;
+  created?: string;
+  last_update?: string;
+  last_error?: string;
+}
+
 export interface BranchProtection {
   branch_name?: string;
   protected_branch_name?: string;
@@ -488,6 +642,16 @@ export interface AccessToken {
   sha1?: string;
   token_last_eight?: string;
   scopes?: string[];
+}
+
+export interface OAuth2Application {
+  id: number;
+  name: string;
+  client_id: string;
+  client_secret?: string;
+  redirect_uris: string[];
+  confidential_client?: boolean;
+  created?: string;
 }
 
 export interface EmailAddress {
@@ -601,6 +765,132 @@ export class GiteaService {
     return this.request('GET', '/user') as Promise<GiteaUser>;
   }
 
+  async getAdminUsers(params?: { source_id?: number; login_name?: string; page?: number; limit?: number }) {
+    return this.request('GET', '/admin/users', null, params) as Promise<GiteaUser[]>;
+  }
+
+  async createAdminUser(data: {
+    username: string;
+    email: string;
+    password: string;
+    full_name?: string;
+    login_name?: string;
+    source_id?: number;
+    must_change_password?: boolean;
+    send_notify?: boolean;
+    restricted?: boolean;
+    visibility?: string;
+  }) {
+    return this.request('POST', '/admin/users', data) as Promise<GiteaUser>;
+  }
+
+  async renameAdminUser(username: string, new_username: string) {
+    return this.request('POST', `/admin/users/${encodeURIComponent(username)}/rename`, { new_username });
+  }
+
+  async createAdminOrganization(username: string, data: {
+    username: string;
+    full_name?: string;
+    description?: string;
+    website?: string;
+    location?: string;
+    visibility?: string;
+    repo_admin_change_team_access?: boolean;
+  }) {
+    return this.request('POST', `/admin/users/${encodeURIComponent(username)}/orgs`, data) as Promise<Organization>;
+  }
+
+  async createAdminUserRepository(username: string, data: {
+    name: string;
+    description?: string;
+    private?: boolean;
+    auto_init?: boolean;
+    default_branch?: string;
+    gitignores?: string;
+    issue_labels?: string;
+    license?: string;
+    readme?: string;
+    template?: boolean;
+    trust_model?: string;
+  }) {
+    return this.request('POST', `/admin/users/${encodeURIComponent(username)}/repos`, data) as Promise<Repository>;
+  }
+
+  async updateAdminUser(username: string, data: Partial<{
+    active: boolean;
+    admin: boolean;
+    allow_create_organization: boolean;
+    allow_git_hook: boolean;
+    allow_import_local: boolean;
+    description: string;
+    email: string;
+    full_name: string;
+    location: string;
+    login_name: string;
+    max_repo_creation: number;
+    must_change_password: boolean;
+    password: string;
+    prohibit_login: boolean;
+    restricted: boolean;
+    source_id: number;
+    visibility: string;
+    website: string;
+  }>) {
+    return this.request('PATCH', `/admin/users/${encodeURIComponent(username)}`, data) as Promise<GiteaUser>;
+  }
+
+  async deleteAdminUser(username: string, purge?: boolean) {
+    return this.request('DELETE', `/admin/users/${encodeURIComponent(username)}`, null, { purge });
+  }
+
+  async getAdminOrganizations(params?: { page?: number; limit?: number }) {
+    return this.request('GET', '/admin/orgs', null, params) as Promise<Organization[]>;
+  }
+
+  async getAdminUnadoptedRepositories(params?: { pattern?: string; page?: number; limit?: number }) {
+    return this.request('GET', '/admin/unadopted', null, params) as Promise<string[]>;
+  }
+
+  async adoptAdminUnadoptedRepository(owner: string, repo: string) {
+    return this.request('POST', `/admin/unadopted/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+  }
+
+  async deleteAdminUnadoptedRepository(owner: string, repo: string) {
+    return this.request('DELETE', `/admin/unadopted/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+  }
+
+  async getAdminCronTasks(params?: { page?: number; limit?: number }) {
+    return this.request('GET', '/admin/cron', null, params) as Promise<AdminCronTask[]>;
+  }
+
+  async runAdminCronTask(task: string) {
+    return this.request('POST', `/admin/cron/${encodeURIComponent(task)}`);
+  }
+
+  async getAdminActionJobs(params?: { status?: string; page?: number; limit?: number }) {
+    return this.request('GET', '/admin/actions/jobs', null, params) as Promise<{ jobs: AdminActionJob[]; total_count: number }>;
+  }
+
+  async getAdminActionRuns(params?: { event?: string; branch?: string; status?: string; actor?: string; head_sha?: string; page?: number; limit?: number }) {
+    return this.request('GET', '/admin/actions/runs', null, params) as Promise<{ workflow_runs: AdminActionRun[]; total_count: number }>;
+  }
+
+  async getAdminActionRunners() {
+    return this.request('GET', '/admin/actions/runners') as Promise<{ runners: AdminActionRunner[]; total_count?: number }>;
+  }
+
+  async getAdminActionRunner(runnerId: string | number) {
+    return this.request('GET', `/admin/actions/runners/${encodeURIComponent(String(runnerId))}`) as Promise<AdminActionRunner>;
+  }
+
+  async deleteAdminActionRunner(runnerId: string | number) {
+    return this.request('DELETE', `/admin/actions/runners/${encodeURIComponent(String(runnerId))}`);
+  }
+
+  async createAdminActionRunnerRegistrationToken() {
+    return this.request('POST', '/admin/actions/runners/registration-token') as Promise<{ token: string }>;
+  }
+
   async updateUserSettings(data: {
     full_name?: string;
     description?: string;
@@ -712,6 +1002,62 @@ export class GiteaService {
 
   async deleteAccessToken(username: string, token: string) {
     return this.request('DELETE', `/users/${encodeURIComponent(username)}/tokens/${encodeURIComponent(token)}`);
+  }
+
+  async getOAuth2Applications(params?: { page?: number; limit?: number }) {
+    return this.request('GET', '/user/applications/oauth2', null, params) as Promise<OAuth2Application[]>;
+  }
+
+  async getOAuth2Application(id: number) {
+    return this.request('GET', `/user/applications/oauth2/${id}`) as Promise<OAuth2Application>;
+  }
+
+  async createOAuth2Application(data: { name: string; redirect_uris: string[]; confidential_client?: boolean }) {
+    return this.request('POST', '/user/applications/oauth2', data) as Promise<OAuth2Application>;
+  }
+
+  async updateOAuth2Application(id: number, data: { name: string; redirect_uris: string[]; confidential_client?: boolean }) {
+    return this.request('PATCH', `/user/applications/oauth2/${id}`, data) as Promise<OAuth2Application>;
+  }
+
+  async deleteOAuth2Application(id: number) {
+    return this.request('DELETE', `/user/applications/oauth2/${id}`);
+  }
+
+  async getPackages(owner: string, params?: { type?: string; q?: string; page?: number; limit?: number }) {
+    return this.request('GET', `/packages/${encodeURIComponent(owner)}`, null, params) as Promise<PackageVersion[]>;
+  }
+
+  async getPackageVersions(owner: string, type: string, name: string, params?: { page?: number; limit?: number }) {
+    return this.request('GET', `/packages/${encodeURIComponent(owner)}/${encodeURIComponent(type)}/${encodeURIComponent(name)}`, null, params) as Promise<PackageVersion[]>;
+  }
+
+  async getLatestPackageVersion(owner: string, type: string, name: string) {
+    return this.request('GET', `/packages/${encodeURIComponent(owner)}/${encodeURIComponent(type)}/${encodeURIComponent(name)}/-/latest`) as Promise<PackageVersion>;
+  }
+
+  async getPackage(owner: string, type: string, name: string, version: string) {
+    return this.request('GET', `/packages/${encodeURIComponent(owner)}/${encodeURIComponent(type)}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`) as Promise<PackageVersion>;
+  }
+
+  async deletePackageVersion(owner: string, type: string, name: string, version: string) {
+    return this.request('DELETE', `/packages/${encodeURIComponent(owner)}/${encodeURIComponent(type)}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`);
+  }
+
+  async deletePackage(owner: string, type: string, name: string) {
+    return this.request('DELETE', `/packages/${encodeURIComponent(owner)}/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
+  }
+
+  async getPackageFiles(owner: string, type: string, name: string, version: string) {
+    return this.request('GET', `/packages/${encodeURIComponent(owner)}/${encodeURIComponent(type)}/${encodeURIComponent(name)}/${encodeURIComponent(version)}/files`) as Promise<PackageFile[]>;
+  }
+
+  async linkPackageRepository(owner: string, type: string, name: string, repoName: string) {
+    return this.request('POST', `/packages/${encodeURIComponent(owner)}/${encodeURIComponent(type)}/${encodeURIComponent(name)}/-/link/${encodeURIComponent(repoName)}`, {});
+  }
+
+  async unlinkPackageRepository(owner: string, type: string, name: string) {
+    return this.request('POST', `/packages/${encodeURIComponent(owner)}/${encodeURIComponent(type)}/${encodeURIComponent(name)}/-/unlink`, {});
   }
 
   async getRepositories() {
@@ -944,6 +1290,26 @@ export class GiteaService {
     return this.request('GET', `/repos/${owner}/${repo}/subscribers`, null, params) as Promise<GiteaUser[]>;
   }
 
+  async getRepositoryActivityFeeds(owner: string, repo: string, params?: { date?: string; page?: number; limit?: number }) {
+    return this.request('GET', `/repos/${owner}/${repo}/activities/feeds`, null, params) as Promise<ActivityFeed[]>;
+  }
+
+  getRepositoryArchiveUrl(owner: string, repo: string, archive: string) {
+    return `${this.config.baseUrl}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/archive/${encodeURIComponent(archive)}`;
+  }
+
+  getRepositoryRawFileUrl(owner: string, repo: string, path: string, ref?: string) {
+    const url = new URL(`${this.config.baseUrl}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/raw/${path}`);
+    if (ref) url.searchParams.set('ref', ref);
+    return url.toString();
+  }
+
+  getRepositoryMediaFileUrl(owner: string, repo: string, path: string, ref?: string) {
+    const url = new URL(`${this.config.baseUrl}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/media/${path}`);
+    if (ref) url.searchParams.set('ref', ref);
+    return url.toString();
+  }
+
   async createRepositoryFork(owner: string, repo: string, data?: { organization?: string; name?: string }) {
     return this.request('POST', `/repos/${owner}/${repo}/forks`, data || {}) as Promise<Repository>;
   }
@@ -994,6 +1360,36 @@ export class GiteaService {
     return this.request('POST', `/repos/${owner}/${repo}/transfer/reject`, {});
   }
 
+  async syncMirror(owner: string, repo: string) {
+    return this.request('POST', `/repos/${owner}/${repo}/mirror-sync`, {});
+  }
+
+  async getPushMirrors(owner: string, repo: string, params?: { page?: number; limit?: number }) {
+    return this.request('GET', `/repos/${owner}/${repo}/push_mirrors`, null, params) as Promise<PushMirror[]>;
+  }
+
+  async createPushMirror(owner: string, repo: string, data: {
+    remote_address: string;
+    remote_username?: string;
+    remote_password?: string;
+    interval?: string;
+    sync_on_commit?: boolean;
+  }) {
+    return this.request('POST', `/repos/${owner}/${repo}/push_mirrors`, data) as Promise<PushMirror>;
+  }
+
+  async getPushMirror(owner: string, repo: string, name: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/push_mirrors/${encodeURIComponent(name)}`) as Promise<PushMirror>;
+  }
+
+  async deletePushMirror(owner: string, repo: string, name: string) {
+    return this.request('DELETE', `/repos/${owner}/${repo}/push_mirrors/${encodeURIComponent(name)}`);
+  }
+
+  async syncPushMirrors(owner: string, repo: string) {
+    return this.request('POST', `/repos/${owner}/${repo}/push_mirrors-sync`, {});
+  }
+
   async isStarred(owner: string, repo: string) {
     try {
       await this.request('GET', `/user/starred/${owner}/${repo}`);
@@ -1038,8 +1434,45 @@ export class GiteaService {
     return this.request('GET', `/repos/${owner}/${repo}/branches`) as Promise<Branch[]>;
   }
 
+  async getBranch(owner: string, repo: string, branch: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`) as Promise<Branch>;
+  }
+
   async getGitTree(owner: string, repo: string, sha: string, recursive = true) {
     return this.request('GET', `/repos/${owner}/${repo}/git/trees/${sha}`, null, { recursive }) as Promise<GitTree>;
+  }
+
+  async getGitBlob(owner: string, repo: string, sha: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/git/blobs/${encodeURIComponent(sha)}`) as Promise<GitBlob>;
+  }
+
+  async getGitCommit(owner: string, repo: string, sha: string, params?: { stat?: boolean; verification?: boolean; files?: boolean }) {
+    return this.request('GET', `/repos/${owner}/${repo}/git/commits/${encodeURIComponent(sha)}`, null, params) as Promise<Commit>;
+  }
+
+  async getGitCommitDiff(owner: string, repo: string, sha: string, type: 'diff' | 'patch' = 'diff') {
+    return this.request('GET', `/repos/${owner}/${repo}/git/commits/${encodeURIComponent(sha)}.${type}`) as Promise<string>;
+  }
+
+  async getGitTag(owner: string, repo: string, sha: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/git/tags/${encodeURIComponent(sha)}`) as Promise<GitAnnotatedTag>;
+  }
+
+  async getGitRefs(owner: string, repo: string, ref?: string) {
+    const suffix = ref ? `/${encodeURIComponent(ref)}` : '';
+    return this.request('GET', `/repos/${owner}/${repo}/git/refs${suffix}`) as Promise<GitRef[]>;
+  }
+
+  async createGitRef(owner: string, repo: string, data: { ref: string; sha: string }) {
+    return this.request('POST', `/repos/${owner}/${repo}/git/refs`, data) as Promise<GitRef>;
+  }
+
+  async updateGitRef(owner: string, repo: string, ref: string, data: { sha: string; force?: boolean }) {
+    return this.request('PATCH', `/repos/${owner}/${repo}/git/refs/${encodeURIComponent(ref)}`, data) as Promise<GitRef>;
+  }
+
+  async deleteGitRef(owner: string, repo: string, ref: string) {
+    return this.request('DELETE', `/repos/${owner}/${repo}/git/refs/${encodeURIComponent(ref)}`);
   }
 
   async createBranch(owner: string, repo: string, data: { new_branch_name: string; old_branch_name?: string; old_ref_name?: string }) {
@@ -1048,6 +1481,10 @@ export class GiteaService {
 
   async deleteBranch(owner: string, repo: string, branch: string) {
     return this.request('DELETE', `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`);
+  }
+
+  async renameBranch(owner: string, repo: string, branch: string, name: string) {
+    return this.request('PATCH', `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`, { name });
   }
 
   async getCommits(owner: string, repo: string, sha?: string) {

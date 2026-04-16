@@ -66,6 +66,7 @@ import { RepositorySettingsView } from './RepositorySettingsView';
 import { WikiView } from './WikiView';
 import { TagsView } from './TagsView';
 import { RepositoryInsightsView } from './RepositoryInsightsView';
+import { RepositoryActivityView } from './RepositoryActivityView';
 
 interface RepoViewProps {
   gitea: GiteaService;
@@ -659,6 +660,9 @@ export function RepoView({ gitea }: RepoViewProps) {
             <TabsTrigger value="wiki" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <BookOpen className="w-3.5 h-3.5 mr-2" /> Wiki
             </TabsTrigger>
+            <TabsTrigger value="activity" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <Activity className="w-3.5 h-3.5 mr-2" /> Activity
+            </TabsTrigger>
             <TabsTrigger value="insights" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <Activity className="w-3.5 h-3.5 mr-2" /> Insights
             </TabsTrigger>
@@ -1006,6 +1010,16 @@ export function RepoView({ gitea }: RepoViewProps) {
         <TabsContent value="wiki" className="flex-1 flex flex-col overflow-hidden m-0">
           {owner && repoName && (
             <WikiView
+              gitea={gitea}
+              owner={owner}
+              repo={repoName}
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="activity" className="flex-1 flex flex-col overflow-hidden m-0">
+          {owner && repoName && (
+            <RepositoryActivityView
               gitea={gitea}
               owner={owner}
               repo={repoName}
