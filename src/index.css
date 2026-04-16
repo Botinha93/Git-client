@@ -283,11 +283,87 @@
     @apply rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[0.9em] text-slate-800;
   }
 
+  .markdown-code-block-wrap {
+    @apply my-4;
+  }
+
+  .markdown-code-block-header {
+    @apply flex items-center justify-end rounded-t-xl border border-b-0 border-slate-200 bg-slate-900 px-3 py-2;
+  }
+
+  .markdown-code-block-language {
+    @apply rounded-md border border-slate-700 bg-slate-800 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-slate-300;
+  }
+
   .markdown-code-block {
-    @apply overflow-x-auto rounded-xl border border-slate-200 bg-slate-950 p-4 text-[12px] leading-6 text-slate-100;
+    @apply overflow-x-auto rounded-b-xl border border-slate-200 bg-slate-950 p-4 text-[12px] leading-6 text-slate-100;
+  }
+
+  .markdown-code-block-wrap:not(.has-language) .markdown-code-block {
+    @apply rounded-xl;
   }
 
   .markdown-code-block-code {
     @apply font-mono;
+  }
+
+  .markdown-code-block .hljs-comment,
+  .markdown-code-block .hljs-quote {
+    color: #94a3b8;
+    font-style: italic;
+  }
+
+  .markdown-code-block .hljs-keyword,
+  .markdown-code-block .hljs-selector-tag,
+  .markdown-code-block .hljs-literal,
+  .markdown-code-block .hljs-title,
+  .markdown-code-block .hljs-section,
+  .markdown-code-block .hljs-doctag,
+  .markdown-code-block .hljs-type,
+  .markdown-code-block .hljs-name,
+  .markdown-code-block .hljs-strong {
+    color: #fda4af;
+  }
+
+  .markdown-code-block .hljs-string,
+  .markdown-code-block .hljs-title.class_,
+  .markdown-code-block .hljs-title.class,
+  .markdown-code-block .hljs-title.function_,
+  .markdown-code-block .hljs-title.function,
+  .markdown-code-block .hljs-regexp,
+  .markdown-code-block .hljs-symbol,
+  .markdown-code-block .hljs-bullet,
+  .markdown-code-block .hljs-addition,
+  .markdown-code-block .hljs-link {
+    color: #86efac;
+  }
+
+  .markdown-code-block .hljs-number,
+  .markdown-code-block .hljs-meta,
+  .markdown-code-block .hljs-built_in,
+  .markdown-code-block .hljs-builtin-name,
+  .markdown-code-block .hljs-attr,
+  .markdown-code-block .hljs-attribute,
+  .markdown-code-block .hljs-variable,
+  .markdown-code-block .hljs-template-variable,
+  .markdown-code-block .hljs-selector-class,
+  .markdown-code-block .hljs-selector-attr,
+  .markdown-code-block .hljs-selector-pseudo {
+    color: #7dd3fc;
+  }
+
+  .markdown-code-block .hljs-function,
+  .markdown-code-block .hljs-subst,
+  .markdown-code-block .hljs-code,
+  .markdown-code-block .hljs-formula {
+    color: #e2e8f0;
+  }
+
+  .markdown-code-block .hljs-deletion {
+    color: #fca5a5;
+  }
+
+  .markdown-code-block .hljs-emphasis {
+    font-style: italic;
   }
 }

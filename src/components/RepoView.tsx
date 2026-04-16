@@ -4,7 +4,15 @@ import { GiteaService, Repository, FileContent, Branch, Commit, GitTreeItem, Com
 import { 
   Activity,
   File, 
-  Folder, 
+  FolderClosed,
+  FileArchive,
+  FileAudio,
+  FileCode2,
+  FileImage,
+  FileJson,
+  FileSpreadsheet,
+  FileText,
+  FileVideo,
   ChevronRight, 
   GitBranch, 
   GitFork,
@@ -102,6 +110,93 @@ const statusClasses: Record<CommitStatusState, string> = {
   failure: 'bg-red-50 text-red-700 border-red-100',
   warning: 'bg-orange-50 text-orange-700 border-orange-100',
 };
+
+const CODE_EXTENSIONS = new Set([
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'go', 'rs', 'java', 'c', 'cpp', 'cc',
+  'h', 'hpp', 'cs', 'php', 'rb', 'swift', 'kt', 'kts', 'scala', 'sql', 'sh', 'bash',
+  'zsh', 'ps1', 'bat', 'vue', 'svelte', 'css', 'scss', 'sass', 'less', 'html', 'xml'
+]);
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'avif']);
+const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi']);
+const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'flac', 'm4a']);
+const ARCHIVE_EXTENSIONS = new Set(['zip', 'tar', 'gz', 'tgz', '7z', 'rar', 'bz2', 'xz']);
+const SPREADSHEET_EXTENSIONS = new Set(['csv', 'tsv', 'xls', 'xlsx', 'ods']);
+const TEXT_EXTENSIONS = new Set(['md', 'mdx', 'txt', 'rst', 'adoc']);
+const DATA_EXTENSIONS = new Set(['json', 'yaml', 'yml', 'toml', 'ini', 'conf']);
+
+function getFileName(pathOrName: string) {
+  return pathOrName.split('/').pop() || pathOrName;
+}
+
+function getFileExtension(pathOrName: string) {
+  const fileName = getFileName(pathOrName).toLowerCase();
+  const dotIndex = fileName.lastIndexOf('.');
+  return dotIndex === -1 ? '' : fileName.slice(dotIndex + 1);
+}
+
+function getFileBadgeLabel(pathOrName: string, type: 'file' | 'dir') {
+  if (type === 'dir') {
+    return 'DIR';
+  }
+
+  const fileName = getFileName(pathOrName).toLowerCase();
+  const extension = getFileExtension(pathOrName);
+
+  if (fileName === 'dockerfile') return 'DOCKER';
+  if (fileName === 'makefile') return 'MAKE';
+  if (fileName.startsWith('readme')) return 'README';
+  if (fileName === 'license') return 'LICENSE';
+  if (!extension) return 'FILE';
+  return extension.toUpperCase();
+}
+
+function getExplorerIcon(pathOrName: string, type: 'file' | 'dir', className: string) {
+  if (type === 'dir') {
+    return <FolderClosed className={cn(className, 'text-amber-500')} />;
+  }
+
+  const fileName = getFileName(pathOrName).toLowerCase();
+  const extension = getFileExtension(pathOrName);
+
+  if (fileName === 'dockerfile' || fileName === 'makefile') {
+    return <FileCode2 className={cn(className, 'text-sky-500')} />;
+  }
+
+  if (fileName.startsWith('readme') || fileName === 'license' || TEXT_EXTENSIONS.has(extension)) {
+    return <FileText className={cn(className, 'text-emerald-600')} />;
+  }
+
+  if (DATA_EXTENSIONS.has(extension)) {
+    return <FileJson className={cn(className, 'text-cyan-600')} />;
+  }
+
+  if (SPREADSHEET_EXTENSIONS.has(extension)) {
+    return <FileSpreadsheet className={cn(className, 'text-lime-600')} />;
+  }
+
+  if (IMAGE_EXTENSIONS.has(extension)) {
+    return <FileImage className={cn(className, 'text-fuchsia-500')} />;
+  }
+
+  if (VIDEO_EXTENSIONS.has(extension)) {
+    return <FileVideo className={cn(className, 'text-violet-500')} />;
+  }
+
+  if (AUDIO_EXTENSIONS.has(extension)) {
+    return <FileAudio className={cn(className, 'text-rose-500')} />;
+  }
+
+  if (ARCHIVE_EXTENSIONS.has(extension)) {
+    return <FileArchive className={cn(className, 'text-amber-600')} />;
+  }
+
+  if (CODE_EXTENSIONS.has(extension)) {
+    return <FileCode2 className={cn(className, 'text-sky-500')} />;
+  }
+
+  return <File className={cn(className, 'text-slate-500')} />;
+}
 
 export function RepoView({ gitea }: RepoViewProps) {
   const { owner, repo: repoName } = useParams();
@@ -790,9 +885,17 @@ export function RepoView({ gitea }: RepoViewProps) {
                             className="border-b border-slate-50 hover:bg-slate-50/50 cursor-pointer transition-colors"
                           >
                             <td className="px-4 py-3">
-                              <div className="flex items-center gap-3 text-sm font-medium text-blue-600">
-                                <div className={cn("w-4 h-4 rounded-[3px]", item.type === 'dir' ? "bg-sky-400" : "bg-slate-400")} />
-                                {item.name}
+                              <div className={cn("flex items-center gap-3 text-sm font-medium", item.type === 'dir' ? 'text-sky-700' : 'text-slate-700')}>
+                                {getExplorerIcon(item.name, item.type, 'w-4 h-4 shrink-0')}
+                                <span className="truncate">{item.name}</span>
+                                <span className={cn(
+                                  'ml-1 shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none',
+                                  item.type === 'dir'
+                                    ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                    : 'border-slate-200 bg-slate-50 text-slate-500'
+                                )}>
+                                  {getFileBadgeLabel(item.name, item.type)}
+                                </span>
                               </div>
                             </td>
                             <td className="px-4 py-3 text-sm text-slate-500 w-1/2">
@@ -1256,8 +1359,11 @@ export function RepoView({ gitea }: RepoViewProps) {
                       className="w-full px-4 py-3 text-left hover:bg-slate-50 transition-colors"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-3 h-3 rounded-[3px] bg-slate-400 shrink-0" />
+                        {getExplorerIcon(item.path, 'file', 'w-3.5 h-3.5 shrink-0')}
                         <span className="font-mono text-xs text-slate-700 truncate">{item.path}</span>
+                        <span className="ml-auto shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[10px] leading-none text-slate-500">
+                          {getFileBadgeLabel(item.path, 'file')}
+                        </span>
                       </div>
                     </button>
                   ))
