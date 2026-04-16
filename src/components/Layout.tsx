@@ -178,7 +178,7 @@ export function Layout({ children, repositories, onLogout, user }: LayoutProps) 
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
         {children}
       </main>
     </div>

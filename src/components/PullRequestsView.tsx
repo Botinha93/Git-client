@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { formatDistanceToNow } from 'date-fns';
-import ReactMarkdown from 'react-markdown';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -31,6 +30,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface PullRequestsViewProps {
   gitea: GiteaService;
@@ -683,8 +683,8 @@ export function PullRequestsView({ gitea, owner, repo, defaultBranch }: PullRequ
                           {selectedPullRequest.user.login} <span className="text-slate-400 font-normal">opened this pull request {timeAgo(selectedPullRequest.created_at)}</span>
                         </span>
                       </div>
-                      <div className="p-4 prose prose-slate prose-sm max-w-none">
-                        <ReactMarkdown>{selectedPullRequest.body || '_No description provided._'}</ReactMarkdown>
+                      <div className="p-4">
+                        <MarkdownRenderer content={selectedPullRequest.body} emptyFallback="_No description provided._" />
                       </div>
                     </div>
                   </div>
@@ -748,8 +748,8 @@ export function PullRequestsView({ gitea, owner, repo, defaultBranch }: PullRequ
                             </Badge>
                           </div>
                           {review.body && (
-                            <div className="p-4 prose prose-slate prose-sm max-w-none">
-                              <ReactMarkdown>{review.body}</ReactMarkdown>
+                            <div className="p-4">
+                              <MarkdownRenderer content={review.body} />
                             </div>
                           )}
                           {(reviewComments[review.id] || []).length > 0 && (
@@ -760,8 +760,8 @@ export function PullRequestsView({ gitea, owner, repo, defaultBranch }: PullRequ
                                     <span className="font-mono truncate">{comment.path}</span>
                                     {comment.position !== undefined && <span className="shrink-0">line {comment.position}</span>}
                                   </div>
-                                  <div className="mt-2 prose prose-slate prose-sm max-w-none">
-                                    <ReactMarkdown>{comment.body}</ReactMarkdown>
+                                  <div className="mt-2">
+                                    <MarkdownRenderer content={comment.body} />
                                   </div>
                                 </div>
                               ))}
@@ -791,8 +791,8 @@ export function PullRequestsView({ gitea, owner, repo, defaultBranch }: PullRequ
                           <div className="px-4 py-2 bg-slate-50 border-b border-slate-100">
                             <span className="text-xs font-bold text-slate-700">{comment.user.login} <span className="text-slate-400 font-normal">commented {timeAgo(comment.created_at)}</span></span>
                           </div>
-                          <div className="p-4 prose prose-slate prose-sm max-w-none">
-                            <ReactMarkdown>{comment.body}</ReactMarkdown>
+                          <div className="p-4">
+                            <MarkdownRenderer content={comment.body} />
                           </div>
                         </div>
                       </div>

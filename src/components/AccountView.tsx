@@ -22,6 +22,8 @@ import {
   Users,
 } from 'lucide-react';
 import {
+  ActionSecret,
+  ActionVariable,
   AccessToken,
   EmailAddress,
   GiteaService,
@@ -69,6 +71,8 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
   const [gpgKeys, setGpgKeys] = useState<GpgKey[]>([]);
   const [tokens, setTokens] = useState<AccessToken[]>([]);
   const [oauthApps, setOauthApps] = useState<OAuth2Application[]>([]);
+  const [actionVariables, setActionVariables] = useState<ActionVariable[]>([]);
+  const [actionSecrets, setActionSecrets] = useState<ActionSecret[]>([]);
   const [followers, setFollowers] = useState<GiteaUser[]>([]);
   const [following, setFollowing] = useState<GiteaUser[]>([]);
   const [starredRepos, setStarredRepos] = useState<Repository[]>([]);
@@ -93,6 +97,12 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
   const [oauthRedirectUris, setOauthRedirectUris] = useState('');
   const [oauthConfidential, setOauthConfidential] = useState(true);
   const [newOauthSecret, setNewOauthSecret] = useState('');
+  const [actionVariableName, setActionVariableName] = useState('');
+  const [actionVariableValue, setActionVariableValue] = useState('');
+  const [actionVariableDescription, setActionVariableDescription] = useState('');
+  const [actionSecretName, setActionSecretName] = useState('');
+  const [actionSecretValue, setActionSecretValue] = useState('');
+  const [actionSecretDescription, setActionSecretDescription] = useState('');
 
   useEffect(() => {
     setProfile(user);
@@ -112,6 +122,8 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
       keyResult,
       tokenResult,
       oauthResult,
+      actionVariableResult,
+      actionSecretResult,
       emailResult,
       gpgResult,
       followersResult,
@@ -124,6 +136,8 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
       gitea.getPublicKeys(),
       username ? gitea.getAccessTokens(username) : Promise.resolve([]),
       gitea.getOAuth2Applications({ limit: 50 }),
+      gitea.getUserActionVariables({ limit: 100 }),
+      gitea.getUserActionSecrets({ limit: 100 }),
       gitea.getEmails(),
       gitea.getGpgKeys(),
       gitea.getFollowers(),
@@ -136,6 +150,8 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
     if (keyResult.status === 'fulfilled') setKeys(keyResult.value);
     if (tokenResult.status === 'fulfilled') setTokens(tokenResult.value);
     if (oauthResult.status === 'fulfilled') setOauthApps(oauthResult.value);
+    if (actionVariableResult.status === 'fulfilled') setActionVariables(actionVariableResult.value);
+    if (actionSecretResult.status === 'fulfilled') setActionSecrets(actionSecretResult.value);
     if (emailResult.status === 'fulfilled') setEmails(emailResult.value);
     if (gpgResult.status === 'fulfilled') setGpgKeys(gpgResult.value);
     if (followersResult.status === 'fulfilled') setFollowers(followersResult.value);
@@ -339,6 +355,70 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
     }
   };
 
+  const handleCreateActionVariable = async () => {
+    if (!actionVariableName.trim() || !actionVariableValue.trim()) return;
+    setSaving(true);
+    try {
+      await gitea.createUserActionVariable(actionVariableName.trim(), {
+        value: actionVariableValue,
+        description: actionVariableDescription.trim() || undefined,
+      });
+      const data = await gitea.getUserActionVariables({ limit: 100 });
+      setActionVariables(data);
+      setActionVariableName('');
+      setActionVariableValue('');
+      setActionVariableDescription('');
+    } catch (error) {
+      console.error('Failed to create user action variable:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteActionVariable = async (name: string) => {
+    setSaving(true);
+    try {
+      await gitea.deleteUserActionVariable(name);
+      setActionVariables(actionVariables.filter((item) => item.name !== name));
+    } catch (error) {
+      console.error('Failed to delete user action variable:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreateActionSecret = async () => {
+    if (!actionSecretName.trim() || !actionSecretValue.trim()) return;
+    setSaving(true);
+    try {
+      await gitea.createOrUpdateUserActionSecret(actionSecretName.trim(), {
+        data: actionSecretValue,
+        description: actionSecretDescription.trim() || undefined,
+      });
+      const data = await gitea.getUserActionSecrets({ limit: 100 });
+      setActionSecrets(data);
+      setActionSecretName('');
+      setActionSecretValue('');
+      setActionSecretDescription('');
+    } catch (error) {
+      console.error('Failed to save user action secret:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteActionSecret = async (name: string) => {
+    setSaving(true);
+    try {
+      await gitea.deleteUserActionSecret(name);
+      setActionSecrets(actionSecrets.filter((item) => item.name !== name));
+    } catch (error) {
+      console.error('Failed to delete user action secret:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleFollowUser = async () => {
     if (!followUserValue.trim()) return;
     setSaving(true);
@@ -435,6 +515,9 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
             </TabsTrigger>
             <TabsTrigger value="tokens" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <LockKeyhole className="w-3.5 h-3.5 mr-2" /> Tokens
+            </TabsTrigger>
+            <TabsTrigger value="actions" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
+              <Settings className="w-3.5 h-3.5 mr-2" /> Actions
             </TabsTrigger>
             <TabsTrigger value="applications" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <ExternalLink className="w-3.5 h-3.5 mr-2" /> Apps
@@ -789,6 +872,82 @@ export function AccountView({ gitea, user, onUserUpdate }: AccountViewProps) {
               </div>
             </ScrollArea>
           </div>
+        </TabsContent>
+
+        <TabsContent value="actions" className="flex-1 overflow-hidden m-0">
+          <ScrollArea className="h-full">
+            <div className="p-8 max-w-6xl mx-auto grid grid-cols-[1fr_360px] gap-8">
+              <div className="space-y-6">
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                  <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 text-sm font-bold text-slate-900">User actions variables</div>
+                  <div className="divide-y divide-slate-100">
+                    {actionVariables.map((variable) => (
+                      <div key={variable.name} className="px-5 py-4 flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-slate-900 truncate">{variable.name}</div>
+                          <div className="text-xs text-slate-400 truncate">{variable.description || 'No description'}</div>
+                        </div>
+                        <Button variant="ghost" size="icon" disabled={saving} onClick={() => handleDeleteActionVariable(variable.name)} className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                    {actionVariables.length === 0 && <div className="p-12 text-center text-sm text-slate-400">No user actions variables configured</div>}
+                  </div>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                  <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 text-sm font-bold text-slate-900">User actions secrets</div>
+                  <div className="divide-y divide-slate-100">
+                    {actionSecrets.map((secret) => (
+                      <div key={secret.name} className="px-5 py-4 flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-slate-900 truncate">{secret.name}</div>
+                          <div className="text-xs text-slate-400 truncate">{secret.description || 'Secret value hidden'}</div>
+                        </div>
+                        <Button variant="ghost" size="icon" disabled={saving} onClick={() => handleDeleteActionSecret(secret.name)} className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                    {actionSecrets.length === 0 && <div className="p-12 text-center text-sm text-slate-400">No user actions secrets configured</div>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4 h-fit">
+                  <div className="text-sm font-bold text-slate-900">New variable</div>
+                  <Input value={actionVariableName} onChange={(event) => setActionVariableName(event.target.value)} placeholder="VARIABLE_NAME" className="h-10 border-slate-200 font-mono text-xs" />
+                  <Input value={actionVariableDescription} onChange={(event) => setActionVariableDescription(event.target.value)} placeholder="Description" className="h-10 border-slate-200 text-xs" />
+                  <textarea
+                    value={actionVariableValue}
+                    onChange={(event) => setActionVariableValue(event.target.value)}
+                    placeholder="Variable value"
+                    className="min-h-24 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-sky-100"
+                  />
+                  <Button onClick={handleCreateActionVariable} disabled={!actionVariableName.trim() || !actionVariableValue.trim() || saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
+                    <Plus className="w-3.5 h-3.5 mr-2" /> Save Variable
+                  </Button>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4 h-fit">
+                  <div className="text-sm font-bold text-slate-900">New secret</div>
+                  <Input value={actionSecretName} onChange={(event) => setActionSecretName(event.target.value)} placeholder="SECRET_NAME" className="h-10 border-slate-200 font-mono text-xs" />
+                  <Input value={actionSecretDescription} onChange={(event) => setActionSecretDescription(event.target.value)} placeholder="Description" className="h-10 border-slate-200 text-xs" />
+                  <textarea
+                    value={actionSecretValue}
+                    onChange={(event) => setActionSecretValue(event.target.value)}
+                    placeholder="Secret value"
+                    className="min-h-24 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-sky-100"
+                  />
+                  <Button onClick={handleCreateActionSecret} disabled={!actionSecretName.trim() || !actionSecretValue.trim() || saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
+                    <Plus className="w-3.5 h-3.5 mr-2" /> Save Secret
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </ScrollArea>
         </TabsContent>
 
         <TabsContent value="applications" className="flex-1 overflow-hidden m-0">

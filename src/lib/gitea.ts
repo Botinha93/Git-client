@@ -840,6 +840,34 @@ export class GiteaService {
     return this.request('GET', '/user') as Promise<GiteaUser>;
   }
 
+  async getUserActionVariables(params?: { page?: number; limit?: number }) {
+    return this.request('GET', '/user/actions/variables', null, params) as Promise<ActionVariable[]>;
+  }
+
+  async createUserActionVariable(name: string, data: { value: string; description?: string }) {
+    return this.request('POST', `/user/actions/variables/${encodeURIComponent(name)}`, data);
+  }
+
+  async updateUserActionVariable(name: string, data: { value: string; description?: string; name?: string }) {
+    return this.request('PUT', `/user/actions/variables/${encodeURIComponent(name)}`, data);
+  }
+
+  async deleteUserActionVariable(name: string) {
+    return this.request('DELETE', `/user/actions/variables/${encodeURIComponent(name)}`);
+  }
+
+  async getUserActionSecrets(params?: { page?: number; limit?: number }) {
+    return this.request('GET', '/user/actions/secrets', null, params) as Promise<ActionSecret[]>;
+  }
+
+  async createOrUpdateUserActionSecret(name: string, data: { data: string; description?: string }) {
+    return this.request('PUT', `/user/actions/secrets/${encodeURIComponent(name)}`, data);
+  }
+
+  async deleteUserActionSecret(name: string) {
+    return this.request('DELETE', `/user/actions/secrets/${encodeURIComponent(name)}`);
+  }
+
   async getServerVersion() {
     return this.request('GET', '/version') as Promise<ServerVersion>;
   }

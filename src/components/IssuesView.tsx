@@ -46,7 +46,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
-import ReactMarkdown from 'react-markdown';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface IssuesViewProps {
   gitea: GiteaService;
@@ -243,7 +243,7 @@ export function IssuesView({ gitea, owner, repo }: IssuesViewProps) {
         gitea.getStopwatches()
       ]);
       setComments(data);
-      setIssueReactions(reactions);
+      setIssueReactions(Array.isArray(reactions) ? reactions : []);
       setAttachments(issueAttachments);
       setTrackedTimes(issueTimes);
       setActiveStopwatch(stopwatches.find((watch) => watch.repo_owner_name === owner && watch.repo_name === repo && watch.issue_index === issue.number) || null);
@@ -251,7 +251,11 @@ export function IssuesView({ gitea, owner, repo }: IssuesViewProps) {
         const reactionEntries = await Promise.all(
           data.map(async (comment) => [comment.id, await gitea.getIssueCommentReactions(owner, repo, comment.id)] as const)
         );
-        setCommentReactions(Object.fromEntries(reactionEntries));
+        setCommentReactions(
+          Object.fromEntries(
+            reactionEntries.map(([commentId, items]) => [commentId, Array.isArray(items) ? items : []])
+          )
+        );
       } else {
         setCommentReactions({});
       }
@@ -492,7 +496,9 @@ export function IssuesView({ gitea, owner, repo }: IssuesViewProps) {
     const key = target === 'issue' ? `issue:${content}` : `comment:${commentId}:${content}`;
     setReactionSaving(key);
     try {
-      const reactions = target === 'issue' ? issueReactions : commentReactions[commentId || 0] || [];
+      const reactions = target === 'issue'
+        ? (Array.isArray(issueReactions) ? issueReactions : [])
+        : (Array.isArray(commentReactions[commentId || 0]) ? commentReactions[commentId || 0] : []);
       const currentLogin = currentUser?.login || currentUser?.username;
       const hasReaction = !!currentLogin && reactions.some(reaction => reaction.content === content && (reaction.user.login || reaction.user.username) === currentLogin);
 
@@ -503,7 +509,7 @@ export function IssuesView({ gitea, owner, repo }: IssuesViewProps) {
           await gitea.createIssueReaction(owner, repo, selectedIssue.number, content);
         }
         const updated = await gitea.getIssueReactions(owner, repo, selectedIssue.number);
-        setIssueReactions(updated);
+        setIssueReactions(Array.isArray(updated) ? updated : []);
       } else if (commentId) {
         if (hasReaction) {
           await gitea.deleteIssueCommentReaction(owner, repo, commentId, content);
@@ -511,7 +517,7 @@ export function IssuesView({ gitea, owner, repo }: IssuesViewProps) {
           await gitea.createIssueCommentReaction(owner, repo, commentId, content);
         }
         const updated = await gitea.getIssueCommentReactions(owner, repo, commentId);
-        setCommentReactions({ ...commentReactions, [commentId]: updated });
+        setCommentReactions({ ...commentReactions, [commentId]: Array.isArray(updated) ? updated : [] });
       }
     } catch (error) {
       console.error('Failed to toggle reaction:', error);
@@ -648,9 +654,10 @@ export function IssuesView({ gitea, owner, repo }: IssuesViewProps) {
 
   const totalTrackedSeconds = trackedTimes.reduce((total, trackedTime) => total + (trackedTime.time || 0), 0);
 
-  const renderReactions = (target: 'issue' | 'comment', reactions: Reaction[], commentId?: number) => {
+  const renderReactions = (target: 'issue' | 'comment', reactions: Reaction[] | null | undefined, commentId?: number) => {
     const currentLogin = currentUser?.login || currentUser?.username;
-    const grouped = reactions.reduce<Record<string, Reaction[]>>((acc, reaction) => {
+    const safeReactions = Array.isArray(reactions) ? reactions : [];
+    const grouped = safeReactions.reduce<Record<string, Reaction[]>>((acc, reaction) => {
       acc[reaction.content] = [...(acc[reaction.content] || []), reaction];
       return acc;
     }, {});
@@ -1245,9 +1252,7 @@ export function IssuesView({ gitea, owner, repo }: IssuesViewProps) {
                           </div>
                         </div>
                       ) : (
-                        <div className="prose prose-slate prose-sm max-w-none">
-                          <ReactMarkdown>{selectedIssue.body || '_No description provided._'}</ReactMarkdown>
-                        </div>
+                        <MarkdownRenderer content={selectedIssue.body} emptyFallback="_No description provided._" />
                       )}
                       {!isEditingBody && renderReactions('issue', issueReactions)}
                     </div>
@@ -1303,9 +1308,7 @@ export function IssuesView({ gitea, owner, repo }: IssuesViewProps) {
                                 </div>
                               </div>
                             ) : (
-                              <div className="prose prose-slate prose-sm max-w-none">
-                                <ReactMarkdown>{comment.body}</ReactMarkdown>
-                              </div>
+                              <MarkdownRenderer content={comment.body} />
                             )}
                             {editingCommentId !== comment.id && comment.assets && comment.assets.length > 0 && (
                               <div className="mt-4 flex flex-wrap gap-2">

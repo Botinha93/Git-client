@@ -57,7 +57,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from '@/lib/utils';
 import Editor from '@monaco-editor/react';
-import ReactMarkdown from 'react-markdown';
 import { GitGraph } from './GitGraph';
 import { IssuesView } from './IssuesView';
 import { PullRequestsView } from './PullRequestsView';
@@ -67,6 +66,7 @@ import { WikiView } from './WikiView';
 import { TagsView } from './TagsView';
 import { RepositoryInsightsView } from './RepositoryInsightsView';
 import { RepositoryActivityView } from './RepositoryActivityView';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface RepoViewProps {
   gitea: GiteaService;
@@ -521,7 +521,7 @@ export function RepoView({ gitea }: RepoViewProps) {
   if (!repository) return <div className="p-8">Repository not found.</div>;
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-slate-100">
+    <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden bg-slate-100">
       {/* Repo Header */}
       <header className="bg-white px-8 py-4 border-b border-slate-200 flex justify-between items-center shrink-0">
         <div className="flex items-center gap-2 text-sm text-slate-500">
@@ -636,7 +636,7 @@ export function RepoView({ gitea }: RepoViewProps) {
         </div>
       </header>
 
-      <Tabs defaultValue="code" className="flex-1 flex flex-col overflow-hidden">
+      <Tabs defaultValue="code" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
         <div className="bg-white px-8 border-b border-slate-200">
           <TabsList className="bg-transparent h-12 p-0 gap-8">
             <TabsTrigger value="code" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
@@ -672,8 +672,8 @@ export function RepoView({ gitea }: RepoViewProps) {
           </TabsList>
         </div>
 
-        <TabsContent value="code" className="flex-1 flex flex-col overflow-hidden m-0">
-          <ScrollArea className="flex-1">
+        <TabsContent value="code" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
+          <ScrollArea className="flex-1 min-h-0">
             <div className="p-8 max-w-6xl mx-auto space-y-6">
               {/* Stats Bar */}
               <div className="grid grid-cols-4 gap-8 p-6 bg-white border border-slate-200 rounded-xl shadow-sm">
@@ -892,9 +892,7 @@ export function RepoView({ gitea }: RepoViewProps) {
                 <h3 className="text-sm font-bold text-slate-900 mb-4">{readmeName || 'README'}</h3>
                 <div className="h-px bg-slate-100 mb-6" />
                 {readmeContent ? (
-                  <div className="prose prose-slate prose-sm max-w-none">
-                    <ReactMarkdown>{readmeContent}</ReactMarkdown>
-                  </div>
+                  <MarkdownRenderer content={readmeContent} />
                 ) : (
                   <p className="text-sm leading-relaxed text-slate-500">No README found on {currentBranch}.</p>
                 )}
@@ -903,8 +901,8 @@ export function RepoView({ gitea }: RepoViewProps) {
           </ScrollArea>
         </TabsContent>
 
-        <TabsContent value="history" className="flex-1 flex flex-col overflow-hidden m-0">
-          <ScrollArea className="flex-1">
+        <TabsContent value="history" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
+          <ScrollArea className="flex-1 min-h-0">
             <div className="p-8 max-w-6xl mx-auto space-y-6">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
@@ -967,13 +965,13 @@ export function RepoView({ gitea }: RepoViewProps) {
           </ScrollArea>
         </TabsContent>
 
-        <TabsContent value="issues" className="flex-1 flex flex-col overflow-hidden m-0">
+        <TabsContent value="issues" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
           {owner && repoName && (
             <IssuesView gitea={gitea} owner={owner} repo={repoName} />
           )}
         </TabsContent>
 
-        <TabsContent value="pulls" className="flex-1 flex flex-col overflow-hidden m-0">
+        <TabsContent value="pulls" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
           {owner && repoName && (
             <PullRequestsView
               gitea={gitea}
@@ -984,7 +982,7 @@ export function RepoView({ gitea }: RepoViewProps) {
           )}
         </TabsContent>
 
-        <TabsContent value="releases" className="flex-1 flex flex-col overflow-hidden m-0">
+        <TabsContent value="releases" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
           {owner && repoName && (
             <ReleasesView
               gitea={gitea}
@@ -995,7 +993,7 @@ export function RepoView({ gitea }: RepoViewProps) {
           )}
         </TabsContent>
 
-        <TabsContent value="tags" className="flex-1 flex flex-col overflow-hidden m-0">
+        <TabsContent value="tags" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
           {owner && repoName && (
             <TagsView
               gitea={gitea}
@@ -1007,7 +1005,7 @@ export function RepoView({ gitea }: RepoViewProps) {
           )}
         </TabsContent>
 
-        <TabsContent value="wiki" className="flex-1 flex flex-col overflow-hidden m-0">
+        <TabsContent value="wiki" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
           {owner && repoName && (
             <WikiView
               gitea={gitea}
@@ -1017,7 +1015,7 @@ export function RepoView({ gitea }: RepoViewProps) {
           )}
         </TabsContent>
 
-        <TabsContent value="activity" className="flex-1 flex flex-col overflow-hidden m-0">
+        <TabsContent value="activity" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
           {owner && repoName && (
             <RepositoryActivityView
               gitea={gitea}
@@ -1027,7 +1025,7 @@ export function RepoView({ gitea }: RepoViewProps) {
           )}
         </TabsContent>
 
-        <TabsContent value="insights" className="flex-1 flex flex-col overflow-hidden m-0">
+        <TabsContent value="insights" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
           {owner && repoName && (
             <RepositoryInsightsView
               gitea={gitea}
@@ -1038,7 +1036,7 @@ export function RepoView({ gitea }: RepoViewProps) {
           )}
         </TabsContent>
 
-        <TabsContent value="settings" className="flex-1 flex flex-col overflow-hidden m-0">
+        <TabsContent value="settings" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
           {owner && repoName && (
             <RepositorySettingsView
               gitea={gitea}

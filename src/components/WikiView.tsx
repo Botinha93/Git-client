@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
 import { ArrowLeft, BookOpen, Edit3, FileText, Plus, Save, Search, Trash2 } from 'lucide-react';
 import { GiteaService, WikiPage, WikiPageMeta } from '@/src/lib/gitea';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface WikiViewProps {
   gitea: GiteaService;
@@ -203,8 +203,8 @@ export function WikiView({ gitea, owner, repo }: WikiViewProps) {
           </div>
           <ScrollArea className="flex-1 bg-slate-50/30">
             <div className="p-8 max-w-4xl mx-auto">
-              <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 prose prose-slate prose-sm max-w-none">
-                <ReactMarkdown>{pageContent(selectedPage) || '_This page is empty._'}</ReactMarkdown>
+              <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+                <MarkdownRenderer content={pageContent(selectedPage)} emptyFallback="_This page is empty._" />
               </div>
             </div>
           </ScrollArea>

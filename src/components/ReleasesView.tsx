@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { formatDistanceToNow } from 'date-fns';
-import ReactMarkdown from 'react-markdown';
 import {
   Archive,
   ArrowLeft,
@@ -28,6 +27,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface ReleasesViewProps {
   gitea: GiteaService;
@@ -387,8 +387,8 @@ export function ReleasesView({ gitea, owner, repo, defaultBranch }: ReleasesView
                   <Archive className="w-4 h-4 text-slate-500" />
                   <span className="text-sm font-bold text-slate-900">Release notes</span>
                 </div>
-                <div className="p-6 prose prose-slate prose-sm max-w-none">
-                  <ReactMarkdown>{selectedRelease.body || '_No release notes provided._'}</ReactMarkdown>
+                <div className="p-6">
+                  <MarkdownRenderer content={selectedRelease.body} emptyFallback="_No release notes provided._" />
                 </div>
               </div>
 
