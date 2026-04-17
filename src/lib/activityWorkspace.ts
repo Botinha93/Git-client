@@ -5,16 +5,21 @@ export interface ActivityProject {
   name: string;
   color: string;
   description?: string;
+  closedAt?: string;
 }
+
+export type ActivitySprintClosureMode = 'manual' | 'automatic';
 
 export interface ActivitySprint {
   id: string;
   name: string;
   color: string;
   goal?: string;
-  projectId?: string;
+  projectId: string;
+  closureMode: ActivitySprintClosureMode;
   startDate?: string;
   endDate?: string;
+  closedAt?: string;
 }
 
 export interface ActivityWorkspace {
@@ -52,8 +57,23 @@ export function loadActivityWorkspace(): ActivityWorkspace {
 
     const parsed = JSON.parse(raw) as Partial<ActivityWorkspace>;
     return {
-      projects: Array.isArray(parsed.projects) ? parsed.projects : [],
-      sprints: Array.isArray(parsed.sprints) ? parsed.sprints : [],
+      projects: Array.isArray(parsed.projects)
+        ? parsed.projects.map((project) => ({
+            ...project,
+            closedAt: typeof project?.closedAt === 'string' ? project.closedAt : undefined,
+          }))
+        : [],
+      sprints: Array.isArray(parsed.sprints)
+        ? parsed.sprints
+            .map((sprint) => ({
+              ...sprint,
+              projectId: typeof sprint?.projectId === 'string' ? sprint.projectId : '',
+              closureMode: (sprint?.closureMode === 'automatic' ? 'automatic' : 'manual') as ActivitySprintClosureMode,
+              endDate: typeof sprint?.endDate === 'string' ? sprint.endDate : undefined,
+              closedAt: typeof sprint?.closedAt === 'string' ? sprint.closedAt : undefined,
+            }))
+            .filter((sprint) => sprint.projectId)
+        : [],
     };
   } catch {
     return EMPTY_WORKSPACE;
@@ -131,4 +151,28 @@ export function humanizeActivityId(id: string) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+export function isActivityProjectClosed(project?: Pick<ActivityProject, 'closedAt'> | null) {
+  return Boolean(project?.closedAt);
+}
+
+export function isActivitySprintClosed(
+  sprint?: Pick<ActivitySprint, 'closedAt' | 'closureMode' | 'endDate'> | null,
+  now = new Date(),
+) {
+  if (!sprint) {
+    return false;
+  }
+
+  if (sprint.closedAt) {
+    return true;
+  }
+
+  if (sprint.closureMode === 'automatic' && sprint.endDate) {
+    const endOfDay = new Date(`${sprint.endDate}T23:59:59`);
+    return !Number.isNaN(endOfDay.getTime()) && endOfDay.getTime() < now.getTime();
+  }
+
+  return false;
 }

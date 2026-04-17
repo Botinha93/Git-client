@@ -6,8 +6,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 interface SupportInboxViewProps {
-  giteaBaseUrl: string;
-  giteaToken: string;
+  onUnauthorized?: () => void;
 }
 
 interface InboxReport {
@@ -57,16 +56,27 @@ interface AttachmentPreview {
   text?: string;
 }
 
-async function developerRequest<T>(path: string, baseUrl: string, token: string, options: RequestInit = {}) {
+interface SupportUserSummary {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: string;
+  reportCount: number;
+  lastReportAt?: string;
+}
+
+type SupportWorkspaceView = 'reports' | 'users';
+
+async function developerRequest<T>(path: string, options: RequestInit = {}) {
   const headers = new Headers(options.headers || {});
   headers.set('Content-Type', 'application/json');
-  headers.set('x-gitea-token', token);
-  headers.set('x-gitea-base-url', baseUrl);
 
-  const response = await fetch(path, { ...options, headers });
+  const response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(body?.error || `Request failed (${response.status})`);
+    const error = new Error(body?.error || `Request failed (${response.status})`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
   return body as T;
 }
@@ -79,7 +89,8 @@ function formatBytes(size: number) {
 
 const STATUS_OPTIONS = ['submitted', 'triaged', 'translated', 'in-review', 'approved', 'converted', 'rejected'];
 
-export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewProps) {
+export function SupportInboxView({ onUnauthorized }: SupportInboxViewProps) {
+  const [viewMode, setViewMode] = useState<SupportWorkspaceView>('reports');
   const [reports, setReports] = useState<InboxReport[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
@@ -89,12 +100,35 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
   const [translatedDescription, setTranslatedDescription] = useState('');
   const [developerMessage, setDeveloperMessage] = useState('');
   const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, AttachmentPreview>>({});
+  const [users, setUsers] = useState<SupportUserSummary[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [userSearch, setUserSearch] = useState('');
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [editingUserName, setEditingUserName] = useState('');
+  const [editingUserEmail, setEditingUserEmail] = useState('');
+  const [resetPassword, setResetPassword] = useState('');
+  const [savingUser, setSavingUser] = useState(false);
 
   const selected = useMemo(() => reports.find((entry) => entry.id === selectedId) || reports[0] || null, [reports, selectedId]);
+  const filteredUsers = useMemo(() => {
+    const query = userSearch.trim().toLowerCase();
+    if (!query) {
+      return users;
+    }
+
+    return users.filter((user) => [user.name, user.email].join(' ').toLowerCase().includes(query));
+  }, [users, userSearch]);
+  const selectedUser = useMemo(() => users.find((entry) => entry.id === selectedUserId) || filteredUsers[0] || null, [users, filteredUsers, selectedUserId]);
 
   useEffect(() => {
     void loadReports();
   }, [statusFilter]);
+
+  useEffect(() => {
+    void loadUsers();
+  }, []);
 
   useEffect(() => {
     if (selected) {
@@ -103,20 +137,45 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
     }
   }, [selected?.id]);
 
+  useEffect(() => {
+    if (selectedUser) {
+      setEditingUserName(selectedUser.name);
+      setEditingUserEmail(selectedUser.email);
+    }
+  }, [selectedUser?.id]);
+
   async function loadReports() {
     try {
       setLoading(true);
       const query = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : '';
-      const data = await developerRequest<InboxReport[]>(`/api/support/reports${query}`, giteaBaseUrl, giteaToken, { method: 'GET' });
+      const data = await developerRequest<InboxReport[]>(`/api/support/reports${query}`, { method: 'GET' });
       setReports(data);
       if (!selectedId && data.length > 0) {
         setSelectedId(data[0].id);
       }
       setError(null);
     } catch (loadError: any) {
+      if (loadError.status === 401) {
+        onUnauthorized?.();
+      }
       setError(loadError.message || 'Failed to load support inbox');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadUsers() {
+    try {
+      const data = await developerRequest<SupportUserSummary[]>('/api/support/users', { method: 'GET' });
+      setUsers(data);
+      if (!selectedUserId && data.length > 0) {
+        setSelectedUserId(data[0].id);
+      }
+    } catch (loadError: any) {
+      if (loadError.status === 401) {
+        onUnauthorized?.();
+      }
+      setError(loadError.message || 'Failed to load support users');
     }
   }
 
@@ -126,7 +185,7 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
     }
     try {
       setLoading(true);
-      await developerRequest(`/api/support/reports/${selected.id}`, giteaBaseUrl, giteaToken, {
+      await developerRequest(`/api/support/reports/${selected.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
           status,
@@ -137,6 +196,9 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
       });
       await loadReports();
     } catch (updateError: any) {
+      if (updateError.status === 401) {
+        onUnauthorized?.();
+      }
       setError(updateError.message || 'Failed to update report');
     } finally {
       setLoading(false);
@@ -149,13 +211,16 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
     }
     try {
       setLoading(true);
-      await developerRequest(`/api/support/reports/${selected.id}/messages`, giteaBaseUrl, giteaToken, {
+      await developerRequest(`/api/support/reports/${selected.id}/messages`, {
         method: 'POST',
         body: JSON.stringify({ body: developerMessage }),
       });
       setDeveloperMessage('');
       await loadReports();
     } catch (messageError: any) {
+      if (messageError.status === 401) {
+        onUnauthorized?.();
+      }
       setError(messageError.message || 'Failed to send message');
     } finally {
       setLoading(false);
@@ -168,7 +233,7 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
     }
     try {
       setLoading(true);
-      await developerRequest(`/api/support/reports/${selected.id}/approve`, giteaBaseUrl, giteaToken, {
+      await developerRequest(`/api/support/reports/${selected.id}/approve`, {
         method: 'POST',
         body: JSON.stringify({
           repositoryOwner: selected.repositoryOwner,
@@ -180,9 +245,92 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
       });
       await loadReports();
     } catch (approveError: any) {
+      if (approveError.status === 401) {
+        onUnauthorized?.();
+      }
       setError(approveError.message || 'Failed to approve and create issue');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function createSupportUser() {
+    if (!newUserName.trim() || !newUserEmail.trim() || newUserPassword.trim().length < 6) {
+      return;
+    }
+
+    try {
+      setSavingUser(true);
+      setError(null);
+      const created = await developerRequest<SupportUserSummary>('/api/support/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: newUserName,
+          email: newUserEmail,
+          password: newUserPassword,
+        }),
+      });
+      setUsers((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      setSelectedUserId(created.id);
+      setNewUserName('');
+      setNewUserEmail('');
+      setNewUserPassword('');
+    } catch (saveError: any) {
+      if (saveError.status === 401) {
+        onUnauthorized?.();
+      }
+      setError(saveError.message || 'Failed to create support user');
+    } finally {
+      setSavingUser(false);
+    }
+  }
+
+  async function saveSupportUser() {
+    if (!selectedUser || !editingUserName.trim() || !editingUserEmail.trim()) {
+      return;
+    }
+
+    try {
+      setSavingUser(true);
+      setError(null);
+      const updated = await developerRequest<SupportUserSummary>(`/api/support/users/${selectedUser.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: editingUserName,
+          email: editingUserEmail,
+        }),
+      });
+      setUsers((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (saveError: any) {
+      if (saveError.status === 401) {
+        onUnauthorized?.();
+      }
+      setError(saveError.message || 'Failed to update support user');
+    } finally {
+      setSavingUser(false);
+    }
+  }
+
+  async function resetSupportUserPassword() {
+    if (!selectedUser || resetPassword.trim().length < 6) {
+      return;
+    }
+
+    try {
+      setSavingUser(true);
+      setError(null);
+      await developerRequest(`/api/support/users/${selectedUser.id}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({ password: resetPassword }),
+      });
+      setResetPassword('');
+    } catch (saveError: any) {
+      if (saveError.status === 401) {
+        onUnauthorized?.();
+      }
+      setError(saveError.message || 'Failed to reset password');
+    } finally {
+      setSavingUser(false);
     }
   }
 
@@ -193,13 +341,13 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
     try {
       const response = await fetch(`/api/support/reports/${selected.id}/attachments/${attachmentId}`, {
         method: 'GET',
-        headers: {
-          'x-gitea-token': giteaToken,
-          'x-gitea-base-url': giteaBaseUrl,
-        },
+        credentials: 'same-origin',
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          onUnauthorized?.();
+        }
         throw new Error('Unable to download attachment');
       }
 
@@ -231,13 +379,13 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
     try {
       const response = await fetch(`/api/support/reports/${selected.id}/attachments/${attachmentId}`, {
         method: 'GET',
-        headers: {
-          'x-gitea-token': giteaToken,
-          'x-gitea-base-url': giteaBaseUrl,
-        },
+        credentials: 'same-origin',
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          onUnauthorized?.();
+        }
         throw new Error('Unable to preview attachment');
       }
 
@@ -277,12 +425,22 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
   return (
     <div className="flex-1 min-h-0 overflow-hidden bg-slate-100 p-6">
       <div className="h-full grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <Card className="bg-white shadow-sm h-full">
+          <Card className="bg-white shadow-sm h-full">
           <CardHeader>
-            <CardTitle>Support Inbox</CardTitle>
-            <CardDescription>Review user reports, respond, and convert approved reports into Gitea issues.</CardDescription>
+            <CardTitle>Support Workspace</CardTitle>
+            <CardDescription>Review reports or manage support portal users.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            <div className="flex gap-2">
+              <Button variant={viewMode === 'reports' ? 'default' : 'outline'} onClick={() => setViewMode('reports')} className={viewMode === 'reports' ? 'bg-sky-600 text-white hover:bg-sky-700' : ''}>
+                Inbox
+              </Button>
+              <Button variant={viewMode === 'users' ? 'default' : 'outline'} onClick={() => setViewMode('users')} className={viewMode === 'users' ? 'bg-sky-600 text-white hover:bg-sky-700' : ''}>
+                Users
+              </Button>
+            </div>
+            {viewMode === 'reports' ? (
+              <>
             <div className="flex gap-2">
               <select
                 value={statusFilter}
@@ -314,16 +472,48 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
                 {reports.length === 0 && <div className="text-sm text-slate-500">No reports found.</div>}
               </div>
             </ScrollArea>
+              </>
+            ) : (
+              <>
+                <div className="flex gap-2">
+                  <Input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="Search users by name or email" />
+                  <Button variant="outline" onClick={() => void loadUsers()} disabled={savingUser}>Refresh</Button>
+                </div>
+                {error && <div className="text-sm text-rose-600">{error}</div>}
+                <ScrollArea className="h-[calc(100vh-320px)]">
+                  <div className="space-y-2 pr-2">
+                    {filteredUsers.map((user) => (
+                      <button
+                        key={user.id}
+                        type="button"
+                        onClick={() => setSelectedUserId(user.id)}
+                        className={`w-full rounded-md border px-3 py-2 text-left ${selectedUser?.id === user.id ? 'border-sky-300 bg-sky-50' : 'border-slate-200 bg-slate-50'}`}
+                      >
+                        <div className="text-sm font-medium text-slate-900">{user.name}</div>
+                        <div className="mt-1 text-xs text-slate-500">{user.email}</div>
+                        <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
+                          <span>{user.reportCount} reports</span>
+                          <span>{new Date(user.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      </button>
+                    ))}
+                    {filteredUsers.length === 0 && <div className="text-sm text-slate-500">No support users found.</div>}
+                  </div>
+                </ScrollArea>
+              </>
+            )}
           </CardContent>
         </Card>
 
         <Card className="bg-white shadow-sm h-full">
           <CardHeader>
-            <CardTitle>{selected?.title || 'Select a report'}</CardTitle>
-            {selected && <CardDescription>{selected.userName} ({selected.userEmail})</CardDescription>}
+            <CardTitle>{viewMode === 'reports' ? (selected?.title || 'Select a report') : (selectedUser?.name || 'Manage support users')}</CardTitle>
+            {viewMode === 'reports'
+              ? selected && <CardDescription>{selected.userName} ({selected.userEmail})</CardDescription>
+              : <CardDescription>Create portal accounts, edit user information, and reset passwords.</CardDescription>}
           </CardHeader>
           <CardContent>
-            {!selected ? (
+            {viewMode === 'reports' ? (!selected ? (
               <div className="text-sm text-slate-500">Select a report from the inbox.</div>
             ) : (
               <div className="space-y-5">
@@ -429,6 +619,55 @@ export function SupportInboxView({ giteaBaseUrl, giteaToken }: SupportInboxViewP
                     Approve and create Gitea issue
                   </Button>
                 )}
+              </div>
+            )) : (
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="space-y-5">
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                    <div className="text-xs uppercase text-slate-500">Register support user</div>
+                    <div className="mt-3 space-y-3">
+                      <Input value={newUserName} onChange={(event) => setNewUserName(event.target.value)} placeholder="Full name" />
+                      <Input value={newUserEmail} onChange={(event) => setNewUserEmail(event.target.value)} placeholder="Email address" />
+                      <Input type="password" value={newUserPassword} onChange={(event) => setNewUserPassword(event.target.value)} placeholder="Temporary password (min 6 chars)" />
+                      <Button onClick={() => void createSupportUser()} disabled={savingUser || !newUserName.trim() || !newUserEmail.trim() || newUserPassword.trim().length < 6} className="bg-sky-600 text-white hover:bg-sky-700">
+                        Create user
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  {!selectedUser ? (
+                    <div className="text-sm text-slate-500">Select a user to edit their account.</div>
+                  ) : (
+                    <div className="space-y-5">
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                        <div className="text-xs uppercase text-slate-500">User details</div>
+                        <div className="mt-2 text-sm text-slate-500">
+                          Created {new Date(selectedUser.createdAt).toLocaleString()}
+                          {selectedUser.lastReportAt ? ` · Last report ${new Date(selectedUser.lastReportAt).toLocaleString()}` : ' · No reports yet'}
+                        </div>
+                        <div className="mt-3 space-y-3">
+                          <Input value={editingUserName} onChange={(event) => setEditingUserName(event.target.value)} placeholder="Full name" />
+                          <Input value={editingUserEmail} onChange={(event) => setEditingUserEmail(event.target.value)} placeholder="Email address" />
+                          <Button variant="outline" onClick={() => void saveSupportUser()} disabled={savingUser || !editingUserName.trim() || !editingUserEmail.trim()}>
+                            Save user details
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+                        <div className="text-xs uppercase text-slate-500">Reset password</div>
+                        <div className="mt-3 space-y-3">
+                          <Input type="password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} placeholder="New password (min 6 chars)" />
+                          <Button onClick={() => void resetSupportUserPassword()} disabled={savingUser || resetPassword.trim().length < 6} className="bg-amber-600 text-white hover:bg-amber-700">
+                            Reset password
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </CardContent>

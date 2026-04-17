@@ -6,18 +6,26 @@ import {
   CalendarRange,
   CheckCircle2,
   Circle,
-  FolderKanban,
+  Edit3,
   FolderPlus,
+  LayoutGrid,
+  Lock,
+  LockOpen,
   Loader2,
+  List,
+  Minus,
   Plus,
   RefreshCw,
   Search,
+  Settings2,
   Target,
+  UserCircle2,
 } from 'lucide-react';
 import { GiteaService, Issue, Label, Repository } from '@/src/lib/gitea';
 import {
   ActivityFlowStage,
   ActivityProject,
+  ActivitySprintClosureMode,
   ActivitySprint,
   FLOW_STAGE_META,
   createUniqueActivityId,
@@ -25,6 +33,8 @@ import {
   getProjectLabelName,
   getSprintLabelName,
   humanizeActivityId,
+  isActivityProjectClosed,
+  isActivitySprintClosed,
   isWorkspaceManagedLabel,
   loadActivityWorkspace,
   normalizeHexColor,
@@ -38,6 +48,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface ActivitiesViewProps {
   gitea: GiteaService;
@@ -71,6 +82,7 @@ const INITIAL_ISSUE_DRAFT: NewIssueDraft = {
 };
 
 const FLOW_STAGES: ActivityFlowStage[] = ['backlog', 'in-progress', 'review', 'done'];
+type ActivitiesViewMode = 'board' | 'list';
 
 function getRepoKey(repo: Repository) {
   return `${repo.owner.login}/${repo.name}`;
@@ -112,10 +124,16 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
   const [selectedProjectId, setSelectedProjectId] = useState('all');
   const [selectedSprintId, setSelectedSprintId] = useState('all');
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
+  const [selectedIssueIds, setSelectedIssueIds] = useState<string[]>([]);
+  const [isTaskDialogOpen, setIsTaskDialogOpen] = useState(false);
   const [draggedIssueId, setDraggedIssueId] = useState<string | null>(null);
+  const [draggedIssueIds, setDraggedIssueIds] = useState<string[]>([]);
   const [isCreateIssueOpen, setIsCreateIssueOpen] = useState(false);
+  const [isPlanningDialogOpen, setIsPlanningDialogOpen] = useState(false);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [isCreateSprintOpen, setIsCreateSprintOpen] = useState(false);
+  const [isEditProjectOpen, setIsEditProjectOpen] = useState(false);
+  const [isEditSprintOpen, setIsEditSprintOpen] = useState(false);
   const [newIssue, setNewIssue] = useState<NewIssueDraft>(INITIAL_ISSUE_DRAFT);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectColor, setNewProjectColor] = useState('0ea5e9');
@@ -124,8 +142,26 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
   const [newSprintColor, setNewSprintColor] = useState('f59e0b');
   const [newSprintGoal, setNewSprintGoal] = useState('');
   const [newSprintProjectId, setNewSprintProjectId] = useState('');
+  const [newSprintClosureMode, setNewSprintClosureMode] = useState<ActivitySprintClosureMode>('manual');
+  const [newSprintEndDate, setNewSprintEndDate] = useState('');
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingProjectName, setEditingProjectName] = useState('');
+  const [editingProjectColor, setEditingProjectColor] = useState('0ea5e9');
+  const [editingProjectDescription, setEditingProjectDescription] = useState('');
+  const [editingSprintId, setEditingSprintId] = useState<string | null>(null);
+  const [editingSprintName, setEditingSprintName] = useState('');
+  const [editingSprintColor, setEditingSprintColor] = useState('f59e0b');
+  const [editingSprintGoal, setEditingSprintGoal] = useState('');
+  const [editingSprintProjectId, setEditingSprintProjectId] = useState('');
+  const [editingSprintClosureMode, setEditingSprintClosureMode] = useState<ActivitySprintClosureMode>('manual');
+  const [editingSprintEndDate, setEditingSprintEndDate] = useState('');
+  const [viewMode, setViewMode] = useState<ActivitiesViewMode>('board');
+  const [bulkStageTarget, setBulkStageTarget] = useState<ActivityFlowStage | ''>('');
+  const [bulkAssigneeTarget, setBulkAssigneeTarget] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const repoLabelsCache = useRef<Record<string, Label[]>>({});
+  const repoAssigneesCache = useRef<Record<string, Awaited<ReturnType<GiteaService['getRepoAssignees']>>>>({});
+  const listHeaderCheckboxRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (repositories.length === 0) {
@@ -143,8 +179,42 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
     }
   }, [repositories, newIssue.repoKey]);
 
+  useEffect(() => {
+    if (selectedProjectId !== 'all' && selectedProjectId !== '' && selectedSprintId !== 'all' && selectedSprintId !== '') {
+      const sprint = workspace.sprints.find((item) => item.id === selectedSprintId);
+      if (sprint && sprint.projectId !== selectedProjectId) {
+        setSelectedSprintId('all');
+      }
+    }
+  }, [selectedProjectId, selectedSprintId, workspace.sprints]);
+
+  useEffect(() => {
+    if (newIssue.projectId && newIssue.sprintId) {
+      const sprint = workspace.sprints.find((item) => item.id === newIssue.sprintId);
+      if (sprint && sprint.projectId !== newIssue.projectId) {
+        setNewIssue((current) => ({ ...current, sprintId: '' }));
+      }
+    }
+  }, [newIssue.projectId, newIssue.sprintId, workspace.sprints]);
+
   const projectMap = useMemo(() => Object.fromEntries(workspace.projects.map((project) => [project.id, project])), [workspace.projects]);
   const sprintMap = useMemo(() => Object.fromEntries(workspace.sprints.map((sprint) => [sprint.id, sprint])), [workspace.sprints]);
+  const activeProjects = useMemo(() => workspace.projects.filter((project) => !isActivityProjectClosed(project)), [workspace.projects]);
+  const closedProjects = useMemo(() => workspace.projects.filter((project) => isActivityProjectClosed(project)), [workspace.projects]);
+  const activeSprints = useMemo(() => workspace.sprints.filter((sprint) => !isActivitySprintClosed(sprint)), [workspace.sprints]);
+  const closedSprints = useMemo(() => workspace.sprints.filter((sprint) => isActivitySprintClosed(sprint)), [workspace.sprints]);
+  const availableFilterSprints = useMemo(
+    () => selectedProjectId !== 'all' && selectedProjectId !== ''
+      ? workspace.sprints.filter((sprint) => sprint.projectId === selectedProjectId)
+      : workspace.sprints,
+    [workspace.sprints, selectedProjectId],
+  );
+  const availableNewIssueSprints = useMemo(
+    () => newIssue.projectId
+      ? workspace.sprints.filter((sprint) => sprint.projectId === newIssue.projectId)
+      : [],
+    [workspace.sprints, newIssue.projectId],
+  );
 
   const filteredIssues = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -195,8 +265,97 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
     () => issues.find((item) => item.id === selectedIssueId) || null,
     [issues, selectedIssueId],
   );
+  const selectedListIssues = useMemo(
+    () => issues.filter((item) => selectedIssueIds.includes(item.id)),
+    [issues, selectedIssueIds],
+  );
+  const selectedIssueIdSet = useMemo(() => new Set(selectedIssueIds), [selectedIssueIds]);
+  const availableSelectedIssueSprints = useMemo(
+    () => selectedIssue?.projectId
+      ? workspace.sprints.filter((sprint) => sprint.projectId === selectedIssue.projectId)
+      : [],
+    [workspace.sprints, selectedIssue?.projectId],
+  );
+  const visibleIssueIds = useMemo(() => filteredIssues.map((item) => item.id), [filteredIssues]);
+  const selectedVisibleIssueCount = useMemo(
+    () => selectedIssueIds.filter((issueId) => visibleIssueIds.includes(issueId)).length,
+    [selectedIssueIds, visibleIssueIds],
+  );
+  const selectedListRepoKey = useMemo(() => {
+    if (selectedListIssues.length === 0) {
+      return null;
+    }
+
+    const [first, ...rest] = selectedListIssues;
+    return rest.every((item) => item.repoKey === first.repoKey) ? first.repoKey : null;
+  }, [selectedListIssues]);
+  const selectedListRepo = useMemo(
+    () => repositories.find((repository) => getRepoKey(repository) === selectedListRepoKey) || null,
+    [repositories, selectedListRepoKey],
+  );
+  const [availableBulkAssignees, setAvailableBulkAssignees] = useState<Awaited<ReturnType<GiteaService['getRepoAssignees']>>>([]);
 
   const visibleRepoCount = selectedRepoKeys.length > 0 ? selectedRepoKeys.length : repositories.length;
+
+  useEffect(() => {
+    if (!selectedIssueId) {
+      return;
+    }
+
+    const stillExists = issues.some((item) => item.id === selectedIssueId);
+    if (!stillExists) {
+      setSelectedIssueId(null);
+      setIsTaskDialogOpen(false);
+    }
+  }, [issues, selectedIssueId]);
+
+  useEffect(() => {
+    setSelectedIssueIds((current) => current.filter((issueId) => issues.some((item) => item.id === issueId)));
+  }, [issues]);
+
+  useEffect(() => {
+    if (listHeaderCheckboxRef.current) {
+      listHeaderCheckboxRef.current.indeterminate =
+        selectedVisibleIssueCount > 0 && selectedVisibleIssueCount < visibleIssueIds.length;
+    }
+  }, [selectedVisibleIssueCount, visibleIssueIds.length]);
+
+  useEffect(() => {
+    if (!selectedListRepo) {
+      setAvailableBulkAssignees([]);
+      setBulkAssigneeTarget('');
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      const repoKey = getRepoKey(selectedListRepo);
+      if (repoAssigneesCache.current[repoKey]) {
+        if (!cancelled) {
+          setAvailableBulkAssignees(repoAssigneesCache.current[repoKey]);
+        }
+        return;
+      }
+
+      try {
+        const assignees = await gitea.getRepoAssignees(selectedListRepo.owner.login, selectedListRepo.name);
+        repoAssigneesCache.current[repoKey] = assignees;
+        if (!cancelled) {
+          setAvailableBulkAssignees(assignees);
+        }
+      } catch (error) {
+        console.error('Failed to load repository assignees:', error);
+        if (!cancelled) {
+          setAvailableBulkAssignees([]);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [gitea, selectedListRepo]);
 
   async function loadAllIssues() {
     setLoading(true);
@@ -322,13 +481,12 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
         state: nextFlowStage === 'done' ? 'closed' : 'open',
       });
 
-      const derived = deriveIssueBoardState(updatedIssue);
       setIssues((current) => current.map((entry) => entry.id === item.id ? {
         ...entry,
         issue: updatedIssue,
-        flowStage: derived.flowStage,
-        projectId: derived.projectId,
-        sprintId: derived.sprintId,
+        flowStage: nextFlowStage,
+        projectId: nextProjectId,
+        sprintId: nextSprintId,
       } : entry));
     } catch (error) {
       console.error('Failed to sync workspace issue metadata:', error);
@@ -399,7 +557,7 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
   }
 
   function handleCreateSprint() {
-    if (!newSprintName.trim()) {
+    if (!newSprintName.trim() || !newSprintProjectId || (newSprintClosureMode === 'automatic' && !newSprintEndDate)) {
       return;
     }
 
@@ -408,7 +566,9 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
       name: newSprintName.trim(),
       color: normalizeHexColor(newSprintColor),
       goal: newSprintGoal.trim() || undefined,
-      projectId: newSprintProjectId || undefined,
+      projectId: newSprintProjectId,
+      closureMode: newSprintClosureMode,
+      endDate: newSprintClosureMode === 'automatic' ? newSprintEndDate : undefined,
     };
 
     updateWorkspace({
@@ -419,7 +579,89 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
     setNewSprintColor('f59e0b');
     setNewSprintGoal('');
     setNewSprintProjectId('');
+    setNewSprintClosureMode('manual');
+    setNewSprintEndDate('');
     setIsCreateSprintOpen(false);
+  }
+
+  function openEditProject(project: ActivityProject) {
+    setEditingProjectId(project.id);
+    setEditingProjectName(project.name);
+    setEditingProjectColor(project.color);
+    setEditingProjectDescription(project.description || '');
+    setIsEditProjectOpen(true);
+  }
+
+  function handleEditProject() {
+    if (!editingProjectId || !editingProjectName.trim()) {
+      return;
+    }
+
+    updateWorkspace({
+      ...workspace,
+      projects: workspace.projects.map((project) => project.id === editingProjectId
+        ? {
+            ...project,
+            name: editingProjectName.trim(),
+            color: normalizeHexColor(editingProjectColor),
+            description: editingProjectDescription.trim() || undefined,
+          }
+        : project),
+    });
+    setIsEditProjectOpen(false);
+    setEditingProjectId(null);
+  }
+
+  function openEditSprint(sprint: ActivitySprint) {
+    setEditingSprintId(sprint.id);
+    setEditingSprintName(sprint.name);
+    setEditingSprintColor(sprint.color);
+    setEditingSprintGoal(sprint.goal || '');
+    setEditingSprintProjectId(sprint.projectId);
+    setEditingSprintClosureMode(sprint.closureMode);
+    setEditingSprintEndDate(sprint.endDate || '');
+    setIsEditSprintOpen(true);
+  }
+
+  function handleEditSprint() {
+    if (!editingSprintId || !editingSprintName.trim() || !editingSprintProjectId || (editingSprintClosureMode === 'automatic' && !editingSprintEndDate)) {
+      return;
+    }
+
+    updateWorkspace({
+      ...workspace,
+      sprints: workspace.sprints.map((sprint) => sprint.id === editingSprintId
+        ? {
+            ...sprint,
+            name: editingSprintName.trim(),
+            color: normalizeHexColor(editingSprintColor),
+            goal: editingSprintGoal.trim() || undefined,
+            projectId: editingSprintProjectId,
+            closureMode: editingSprintClosureMode,
+            endDate: editingSprintClosureMode === 'automatic' ? editingSprintEndDate : undefined,
+          }
+        : sprint),
+    });
+    setIsEditSprintOpen(false);
+    setEditingSprintId(null);
+  }
+
+  function toggleProjectClosed(projectId: string) {
+    updateWorkspace({
+      ...workspace,
+      projects: workspace.projects.map((project) => project.id === projectId
+        ? { ...project, closedAt: isActivityProjectClosed(project) ? undefined : new Date().toISOString() }
+        : project),
+    });
+  }
+
+  function toggleSprintClosed(sprintId: string) {
+    updateWorkspace({
+      ...workspace,
+      sprints: workspace.sprints.map((sprint) => sprint.id === sprintId
+        ? { ...sprint, closedAt: isActivitySprintClosed(sprint) ? undefined : new Date().toISOString() }
+        : sprint),
+    });
   }
 
   function toggleRepoSelection(repoKey: string) {
@@ -429,27 +671,189 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
   }
 
   function issueProjectName(projectId: string | null) {
-    return getProjectDefinition(projectId)?.name || (projectId ? humanizeActivityId(projectId) : 'Unassigned');
+    const project = getProjectDefinition(projectId);
+    if (project) {
+      return `${project.name}${isActivityProjectClosed(project) ? ' (Closed)' : ''}`;
+    }
+    return projectId ? humanizeActivityId(projectId) : 'Unassigned';
   }
 
   function issueSprintName(sprintId: string | null) {
-    return getSprintDefinition(sprintId)?.name || (sprintId ? humanizeActivityId(sprintId) : 'No sprint');
+    const sprint = getSprintDefinition(sprintId);
+    if (sprint) {
+      return `${sprint.name}${isActivitySprintClosed(sprint) ? ' (Closed)' : ''}`;
+    }
+    return sprintId ? humanizeActivityId(sprintId) : 'No sprint';
+  }
+
+  function issueAssignee(issue: Issue) {
+    return issue.assignee?.login || 'Unassigned';
+  }
+
+  function openTaskDialog(issueId: string) {
+    setSelectedIssueId(issueId);
+    setIsTaskDialogOpen(true);
+  }
+
+  function handleDragStart(event: React.DragEvent<HTMLElement>, issueId: string) {
+    const nextDraggedIssueIds = selectedIssueIdSet.has(issueId) && selectedIssueIds.length > 1
+      ? selectedIssueIds
+      : [issueId];
+
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', issueId);
+    event.dataTransfer.setData('application/x-gitflow-task', issueId);
+    event.dataTransfer.setData('application/x-gitflow-task-ids', JSON.stringify(nextDraggedIssueIds));
+    setDraggedIssueId(issueId);
+    setDraggedIssueIds(nextDraggedIssueIds);
+  }
+
+  function handleStageDrop(event: React.DragEvent<HTMLElement>, stage: ActivityFlowStage) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    let parsedIssueIds: string[] = [];
+    const transferredIssueIds = event.dataTransfer.getData('application/x-gitflow-task-ids');
+    if (transferredIssueIds) {
+      try {
+        const candidate = JSON.parse(transferredIssueIds) as unknown;
+        if (Array.isArray(candidate)) {
+          parsedIssueIds = candidate.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+        }
+      } catch {
+        parsedIssueIds = [];
+      }
+    }
+
+    const fallbackIssueId =
+      event.dataTransfer.getData('application/x-gitflow-task') ||
+      event.dataTransfer.getData('text/plain') ||
+      draggedIssueId;
+    const nextIssueIds = parsedIssueIds.length > 0
+      ? parsedIssueIds
+      : draggedIssueIds.length > 0
+        ? draggedIssueIds
+        : fallbackIssueId
+          ? [fallbackIssueId]
+          : [];
+
+    if (nextIssueIds.length === 0) {
+      return;
+    }
+
+    void runBulkStageChange(nextIssueIds, stage);
+    setDraggedIssueId(null);
+    setDraggedIssueIds([]);
+  }
+
+  function selectIssue(issueId: string, checked: boolean) {
+    setSelectedIssueIds((current) => checked
+      ? Array.from(new Set([...current, issueId]))
+      : current.filter((item) => item !== issueId));
+  }
+
+  function toggleVisibleIssueSelection() {
+    if (visibleIssueIds.length === 0) {
+      return;
+    }
+
+    setSelectedIssueIds((current) => {
+      const allVisibleSelected = visibleIssueIds.every((issueId) => current.includes(issueId));
+      if (allVisibleSelected) {
+        return current.filter((issueId) => !visibleIssueIds.includes(issueId));
+      }
+      return Array.from(new Set([...current, ...visibleIssueIds]));
+    });
+  }
+
+  async function updateIssueAssignee(item: WorkspaceIssueRecord, assigneeLogin: string | null) {
+    setSyncingIssueId(item.id);
+    setErrorMessage(null);
+
+    try {
+      const updatedIssue = await gitea.updateIssue(item.repository.owner.login, item.repository.name, item.issue.number, {
+        assignees: assigneeLogin ? [assigneeLogin] : [],
+      });
+
+      const derived = deriveIssueBoardState(updatedIssue);
+      setIssues((current) => current.map((entry) => entry.id === item.id ? {
+        ...entry,
+        issue: updatedIssue,
+        flowStage: derived.flowStage,
+        projectId: derived.projectId,
+        sprintId: derived.sprintId,
+      } : entry));
+    } catch (error) {
+      console.error('Failed to update issue assignee:', error);
+      setErrorMessage('Failed to update assignee in Gitea.');
+      throw error;
+    } finally {
+      setSyncingIssueId(null);
+    }
+  }
+
+  async function runBulkStageChange(issueIds: string[], stage: ActivityFlowStage) {
+    const targetItems = issues.filter((item) => issueIds.includes(item.id) && item.flowStage !== stage);
+    if (targetItems.length === 0) {
+      return;
+    }
+
+    const results = await Promise.allSettled(targetItems.map((item) => syncIssueMetadata(item, { flowStage: stage })));
+    const failedCount = results.filter((result) => result.status === 'rejected').length;
+    if (failedCount > 0) {
+      setErrorMessage(`Moved ${targetItems.length - failedCount} task(s), but ${failedCount} failed to update.`);
+    } else {
+      setErrorMessage(null);
+    }
+  }
+
+  async function runBulkAssigneeChange(issueIds: string[], assigneeLogin: string | null) {
+    const targetItems = issues.filter((item) => issueIds.includes(item.id));
+    if (targetItems.length === 0) {
+      return;
+    }
+
+    const results = await Promise.allSettled(targetItems.map((item) => updateIssueAssignee(item, assigneeLogin)));
+    const failedCount = results.filter((result) => result.status === 'rejected').length;
+    if (failedCount > 0) {
+      setErrorMessage(`Updated ${targetItems.length - failedCount} assignee(s), but ${failedCount} failed to sync.`);
+    } else {
+      setErrorMessage(null);
+    }
+  }
+
+  async function applyBulkStageChange() {
+    if (!bulkStageTarget || selectedIssueIds.length === 0) {
+      return;
+    }
+
+    await runBulkStageChange(selectedIssueIds, bulkStageTarget);
+    setBulkStageTarget('');
+  }
+
+  async function applyBulkAssigneeChange() {
+    if (selectedIssueIds.length === 0 || !selectedListRepoKey) {
+      return;
+    }
+
+    await runBulkAssigneeChange(selectedIssueIds, bulkAssigneeTarget || null);
+    setBulkAssigneeTarget('');
   }
 
   return (
     <div className="flex-1 min-h-0 overflow-hidden bg-slate-100">
-      <div className="h-full flex flex-col p-6 gap-6">
+      <div className="flex h-full flex-col gap-6 p-4 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="text-[11px] uppercase tracking-[0.3em] text-slate-400 font-semibold">Workspace Delivery</div>
             <h1 className="text-3xl font-semibold text-slate-900 mt-2">Activities</h1>
-            <p className="text-sm text-slate-500 mt-2 max-w-3xl">
-              Run one shared delivery board across repositories. Projects and sprints live at the workspace layer, while issue status and labels stay synchronized back to Gitea.
-            </p>
           </div>
           <div className="flex items-center gap-3">
             <Button variant="outline" className="border-slate-200 bg-white" onClick={() => void refreshIssues()} disabled={loading || refreshing}>
               <RefreshCw className={cn('w-4 h-4 mr-2', refreshing && 'animate-spin')} /> Refresh
+            </Button>
+            <Button variant="outline" className="border-slate-200 bg-white" onClick={() => setIsPlanningDialogOpen(true)}>
+              <Settings2 className="w-4 h-4 mr-2" /> Planning
             </Button>
             <Button className="bg-sky-600 text-white hover:bg-sky-700" onClick={() => setIsCreateIssueOpen(true)}>
               <Plus className="w-4 h-4 mr-2" /> New Task
@@ -490,16 +894,18 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
           </div>
         )}
 
-        <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[280px_minmax(0,1fr)_320px]">
+        <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
           <div className="min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <ScrollArea className="h-full">
               <div className="p-4 space-y-6">
                 <div className="space-y-3">
+                  <div className="space-y-2">
                   <div className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">Filters</div>
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                     <Input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search tasks, repos, projects..." className="pl-9 bg-slate-50 border-slate-200" />
                   </div>
+                </div>
                 </div>
 
                 <div className="space-y-3">
@@ -534,59 +940,25 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
                 </div>
 
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">Projects</div>
-                    <Button variant="ghost" size="sm" className="h-7 px-2 text-sky-600" onClick={() => setIsCreateProjectOpen(true)}>
-                      <FolderPlus className="w-3.5 h-3.5 mr-1" /> Add
-                    </Button>
-                  </div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">Projects</div>
                   <select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
                     <option value="all">All projects</option>
                     <option value="">Unassigned only</option>
                     {workspace.projects.map((project) => (
-                      <option key={project.id} value={project.id}>{project.name}</option>
+                      <option key={project.id} value={project.id}>{project.name}{isActivityProjectClosed(project) ? ' (Closed)' : ''}</option>
                     ))}
                   </select>
-                  <div className="space-y-2">
-                    {workspace.projects.length === 0 && <div className="text-sm text-slate-400">No workspace projects yet.</div>}
-                    {workspace.projects.map((project) => (
-                      <div key={project.id} className="rounded-xl border border-slate-200 px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <span className="h-3 w-3 rounded-full" style={{ backgroundColor: `#${project.color}` }} />
-                          <span className="text-sm font-medium text-slate-800">{project.name}</span>
-                        </div>
-                        {project.description && <div className="mt-1 text-xs text-slate-400">{project.description}</div>}
-                      </div>
-                    ))}
-                  </div>
                 </div>
 
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">Sprints</div>
-                    <Button variant="ghost" size="sm" className="h-7 px-2 text-sky-600" onClick={() => setIsCreateSprintOpen(true)}>
-                      <CalendarRange className="w-3.5 h-3.5 mr-1" /> Add
-                    </Button>
-                  </div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">Sprints</div>
                   <select value={selectedSprintId} onChange={(event) => setSelectedSprintId(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
                     <option value="all">All sprints</option>
                     <option value="">No sprint</option>
-                    {workspace.sprints.map((sprint) => (
-                      <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
+                    {availableFilterSprints.map((sprint) => (
+                      <option key={sprint.id} value={sprint.id}>{sprint.name}{isActivitySprintClosed(sprint) ? ' (Closed)' : ''}</option>
                     ))}
                   </select>
-                  <div className="space-y-2">
-                    {workspace.sprints.length === 0 && <div className="text-sm text-slate-400">No sprints defined yet.</div>}
-                    {workspace.sprints.map((sprint) => (
-                      <div key={sprint.id} className="rounded-xl border border-slate-200 px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <span className="h-3 w-3 rounded-full" style={{ backgroundColor: `#${sprint.color}` }} />
-                          <span className="text-sm font-medium text-slate-800">{sprint.name}</span>
-                        </div>
-                        {sprint.goal && <div className="mt-1 text-xs text-slate-400">{sprint.goal}</div>}
-                      </div>
-                    ))}
-                  </div>
                 </div>
               </div>
             </ScrollArea>
@@ -598,171 +970,294 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
                 <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading activities...
               </div>
             ) : (
-              <ScrollArea className="h-full">
-                <div className="flex min-h-full gap-4 p-4">
-                  {FLOW_STAGES.map((stage) => (
-                    <div
-                      key={stage}
-                      className="min-w-[300px] flex-1 rounded-2xl bg-slate-50 border border-slate-200"
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        if (!draggedIssueId) {
-                          return;
-                        }
-                        const item = issues.find((issue) => issue.id === draggedIssueId);
-                        if (item && item.flowStage !== stage) {
-                          void syncIssueMetadata(item, { flowStage: stage });
-                        }
-                        setDraggedIssueId(null);
-                      }}
+              <div className="flex h-full min-h-0 flex-col">
+                <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">Workspace view</div>
+                    <div className="mt-1 text-sm text-slate-500">Switch between delivery board and grouped task list.</div>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={viewMode === 'board' ? 'default' : 'ghost'}
+                      className={cn('h-8', viewMode === 'board' ? 'bg-sky-600 text-white hover:bg-sky-700' : 'text-slate-600')}
+                      onClick={() => setViewMode('board')}
                     >
-                      <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="h-3 w-3 rounded-full" style={{ backgroundColor: `#${FLOW_STAGE_META[stage].color}` }} />
-                          <span className="font-semibold text-slate-800">{FLOW_STAGE_META[stage].label}</span>
-                        </div>
-                        <Badge variant="outline" className="border-slate-200 text-slate-500">{issuesByStage[stage].length}</Badge>
-                      </div>
-                      <div className="p-3 space-y-3 min-h-[320px]">
-                        {issuesByStage[stage].map((item) => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            draggable
-                            onDragStart={() => setDraggedIssueId(item.id)}
-                            onClick={() => setSelectedIssueId(item.id)}
-                            className={cn(
-                              'w-full rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-sky-200 hover:shadow-md',
-                              selectedIssueId === item.id ? 'border-sky-300 ring-2 ring-sky-100' : 'border-slate-200',
-                            )}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">{item.repository.owner.login} / {item.repository.name}</div>
-                                <div className="mt-2 font-semibold text-slate-900 line-clamp-2">{item.issue.title}</div>
-                              </div>
-                              <Badge variant="outline" className="border-slate-200 text-slate-500">#{item.issue.number}</Badge>
-                            </div>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <Badge className="bg-slate-100 text-slate-700 hover:bg-slate-100">{issueProjectName(item.projectId)}</Badge>
-                              <Badge className="bg-amber-50 text-amber-700 hover:bg-amber-50">{issueSprintName(item.sprintId)}</Badge>
-                            </div>
-                            <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
-                              <span>{item.issue.comments} comments</span>
-                              <span>{item.issue.state === 'closed' ? 'Closed' : 'Open'}</span>
-                            </div>
-                          </button>
-                        ))}
-                        {issuesByStage[stage].length === 0 && (
-                          <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-400">
-                            No tasks in {FLOW_STAGE_META[stage].label.toLowerCase()}.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                      <LayoutGrid className="mr-2 h-4 w-4" /> Board
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={viewMode === 'list' ? 'default' : 'ghost'}
+                      className={cn('h-8', viewMode === 'list' ? 'bg-sky-600 text-white hover:bg-sky-700' : 'text-slate-600')}
+                      onClick={() => setViewMode('list')}
+                    >
+                      <List className="mr-2 h-4 w-4" /> List
+                    </Button>
+                  </div>
                 </div>
-              </ScrollArea>
-            )}
-          </div>
 
-          <div className="min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <ScrollArea className="h-full">
-              <div className="p-4">
-                {!selectedIssue ? (
-                  <div className="rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-400">
-                    Select a task to edit its project, sprint, or workflow state.
-                  </div>
+                {viewMode === 'board' ? (
+                  <ScrollArea className="h-full">
+                    <div className="flex min-h-full w-max min-w-full gap-4 p-4 pb-6">
+                      {FLOW_STAGES.map((stage) => (
+                        <div
+                          key={stage}
+                          className="w-[320px] shrink-0 rounded-2xl border border-slate-200 bg-slate-50 xl:w-[340px]"
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            event.dataTransfer.dropEffect = 'move';
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            handleStageDrop(event, stage);
+                          }}
+                        >
+                          <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="h-3 w-3 rounded-full" style={{ backgroundColor: `#${FLOW_STAGE_META[stage].color}` }} />
+                              <span className="font-semibold text-slate-800">{FLOW_STAGE_META[stage].label}</span>
+                            </div>
+                            <Badge variant="outline" className="border-slate-200 text-slate-500">{issuesByStage[stage].length}</Badge>
+                          </div>
+                          <div className="p-3 space-y-3 min-h-[320px]">
+                            {issuesByStage[stage].map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                draggable
+                                onDragStart={(event) => handleDragStart(event, item.id)}
+                                onDragEnd={() => {
+                                  setDraggedIssueId(null);
+                                  setDraggedIssueIds([]);
+                                }}
+                                onClick={() => setSelectedIssueId(item.id)}
+                                onDoubleClick={() => openTaskDialog(item.id)}
+                                className={cn(
+                                  'w-full rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-sky-200 hover:shadow-md',
+                                  selectedIssueId === item.id ? 'border-sky-300 ring-2 ring-sky-100' : 'border-slate-200',
+                                )}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="text-xs uppercase tracking-[0.2em] text-slate-400">{item.repository.owner.login} / {item.repository.name}</div>
+                                    <div className="mt-2 font-semibold text-slate-900 line-clamp-2">{item.issue.title}</div>
+                                  </div>
+                                  <Badge variant="outline" className="border-slate-200 text-slate-500">#{item.issue.number}</Badge>
+                                </div>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  <Badge className="bg-slate-100 text-slate-700 hover:bg-slate-100">{issueProjectName(item.projectId)}</Badge>
+                                  <Badge className="bg-amber-50 text-amber-700 hover:bg-amber-50">{issueSprintName(item.sprintId)}</Badge>
+                                </div>
+                                <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+                                  {item.issue.assignee?.avatar_url ? (
+                                    <img
+                                      src={item.issue.assignee.avatar_url}
+                                      alt={item.issue.assignee.login}
+                                      className="h-5 w-5 rounded-full border border-slate-200"
+                                    />
+                                  ) : (
+                                    <UserCircle2 className="h-4 w-4 text-slate-400" />
+                                  )}
+                                  <span className="truncate">Assigned to {issueAssignee(item.issue)}</span>
+                                </div>
+                                <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
+                                  <span>{item.issue.comments} comments</span>
+                                  <span>{item.issue.state === 'closed' ? 'Closed' : 'Open'}</span>
+                                </div>
+                              </button>
+                            ))}
+                            {issuesByStage[stage].length === 0 && (
+                              <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-400">
+                                No tasks in {FLOW_STAGE_META[stage].label.toLowerCase()}.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
                 ) : (
-                  <div className="space-y-5">
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Selected task</div>
-                      <h2 className="mt-2 text-xl font-semibold text-slate-900">{selectedIssue.issue.title}</h2>
-                      <div className="mt-2 text-sm text-slate-500">{selectedIssue.repository.full_name} · Issue #{selectedIssue.issue.number}</div>
-                    </div>
+                  <ScrollArea className="h-full">
+                    <div className="space-y-6 p-4 pb-6">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-400">List actions</div>
+                            <div className="mt-1 text-sm text-slate-600">
+                              {selectedIssueIds.length > 0 ? `${selectedIssueIds.length} selected` : 'Select tasks to move or reassign them in bulk.'}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button type="button" size="sm" variant="outline" className="border-slate-200 bg-white" onClick={toggleVisibleIssueSelection}>
+                              {selectedVisibleIssueCount === visibleIssueIds.length && visibleIssueIds.length > 0 ? <Minus className="mr-2 h-4 w-4" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                              {selectedVisibleIssueCount === visibleIssueIds.length && visibleIssueIds.length > 0 ? 'Clear visible' : 'Select visible'}
+                            </Button>
+                            {selectedIssueIds.length > 0 && (
+                              <Button type="button" size="sm" variant="outline" className="border-slate-200 bg-white" onClick={() => setSelectedIssueIds([])}>
+                                Clear selection
+                              </Button>
+                            )}
+                          </div>
+                        </div>
 
-                    <div className="flex flex-wrap gap-2">
-                      <Link to={`/repo/${selectedIssue.repository.owner.login}/${selectedIssue.repository.name}`} className="inline-flex">
-                        <Button variant="outline" className="border-slate-200 bg-white">
-                          Open Repo
-                        </Button>
-                      </Link>
-                    </div>
-
-                    <Card className="bg-slate-50 ring-slate-200/80">
-                      <CardHeader>
-                        <CardTitle>Workflow</CardTitle>
-                        <CardDescription>Moving the card also updates the linked issue state.</CardDescription>
-                      </CardHeader>
-                      <CardContent className="grid grid-cols-2 gap-2">
-                        {FLOW_STAGES.map((stage) => (
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <select
+                            value={bulkStageTarget}
+                            onChange={(event) => setBulkStageTarget(event.target.value as ActivityFlowStage | '')}
+                            className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                          >
+                            <option value="">Move to stage</option>
+                            {FLOW_STAGES.map((stage) => (
+                              <option key={stage} value={stage}>{FLOW_STAGE_META[stage].label}</option>
+                            ))}
+                          </select>
                           <Button
-                            key={stage}
                             type="button"
-                            variant={selectedIssue.flowStage === stage ? 'default' : 'outline'}
-                            className={cn(selectedIssue.flowStage === stage ? 'bg-sky-600 text-white hover:bg-sky-700' : 'border-slate-200 bg-white')}
-                            disabled={syncingIssueId === selectedIssue.id}
-                            onClick={() => void syncIssueMetadata(selectedIssue, { flowStage: stage })}
+                            size="sm"
+                            className="bg-sky-600 text-white hover:bg-sky-700"
+                            disabled={!bulkStageTarget || selectedIssueIds.length === 0}
+                            onClick={() => void applyBulkStageChange()}
                           >
-                            {stage === 'done' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Circle className="w-4 h-4 mr-2" />}
-                            {FLOW_STAGE_META[stage].label}
+                            Apply status
                           </Button>
-                        ))}
-                      </CardContent>
-                    </Card>
 
-                    <Card className="bg-slate-50 ring-slate-200/80">
-                      <CardHeader>
-                        <CardTitle>Planning dimensions</CardTitle>
-                        <CardDescription>Projects and sprints sync back as repository labels.</CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Project</label>
                           <select
-                            value={selectedIssue.projectId || ''}
-                            onChange={(event) => void syncIssueMetadata(selectedIssue, { projectId: event.target.value || null })}
-                            disabled={syncingIssueId === selectedIssue.id}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                            value={bulkAssigneeTarget}
+                            onChange={(event) => setBulkAssigneeTarget(event.target.value)}
+                            disabled={!selectedListRepoKey || selectedIssueIds.length === 0}
+                            className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 disabled:bg-slate-100 disabled:text-slate-400"
                           >
-                            <option value="">Unassigned</option>
-                            {workspace.projects.map((project) => (
-                              <option key={project.id} value={project.id}>{project.name}</option>
+                            <option value="">{selectedListRepoKey ? 'Unassign selected' : 'Assign requires one repository'}</option>
+                            {availableBulkAssignees.map((assignee) => (
+                              <option key={assignee.login} value={assignee.login}>{assignee.full_name || assignee.login}</option>
                             ))}
                           </select>
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Sprint</label>
-                          <select
-                            value={selectedIssue.sprintId || ''}
-                            onChange={(event) => void syncIssueMetadata(selectedIssue, { sprintId: event.target.value || null })}
-                            disabled={syncingIssueId === selectedIssue.id}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="border-slate-200 bg-white"
+                            disabled={!selectedListRepoKey || selectedIssueIds.length === 0}
+                            onClick={() => void applyBulkAssigneeChange()}
                           >
-                            <option value="">No sprint</option>
-                            {workspace.sprints.map((sprint) => (
-                              <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
-                            ))}
-                          </select>
+                            Apply assignee
+                          </Button>
                         </div>
-                      </CardContent>
-                    </Card>
+                      </div>
 
-                    <Card className="bg-slate-50 ring-slate-200/80">
-                      <CardHeader>
-                        <CardTitle>Issue body</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="text-sm leading-6 text-slate-600 whitespace-pre-wrap">
-                          {selectedIssue.issue.body?.trim() || 'No issue description.'}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </div>
+                      {FLOW_STAGES.map((stage) => (
+                        <section
+                          key={stage}
+                          className="space-y-3"
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            event.dataTransfer.dropEffect = 'move';
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            handleStageDrop(event, stage);
+                          }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="h-3 w-3 rounded-full" style={{ backgroundColor: `#${FLOW_STAGE_META[stage].color}` }} />
+                              <h3 className="text-base font-semibold text-slate-900">{FLOW_STAGE_META[stage].label}</h3>
+                            </div>
+                            <Badge variant="outline" className="border-slate-200 text-slate-500">
+                              {issuesByStage[stage].length}
+                            </Badge>
+                          </div>
+
+                          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                            {issuesByStage[stage].length > 0 && (
+                              <div className="grid grid-cols-[40px_minmax(0,2.2fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_72px] items-center gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                                <div className="flex items-center justify-center">
+                                  <input
+                                    ref={listHeaderCheckboxRef}
+                                    type="checkbox"
+                                    checked={visibleIssueIds.length > 0 && selectedVisibleIssueCount === visibleIssueIds.length}
+                                    onChange={toggleVisibleIssueSelection}
+                                    className="h-4 w-4 rounded border-slate-300 text-sky-600"
+                                  />
+                                </div>
+                                <div>Task</div>
+                                <div>Repository</div>
+                                <div>Project</div>
+                                <div>Sprint</div>
+                                <div>Assigned To</div>
+                                <div className="text-right">Notes</div>
+                              </div>
+                            )}
+
+                            {issuesByStage[stage].map((item) => (
+                              <div
+                                key={item.id}
+                                draggable
+                                onDragStart={(event) => handleDragStart(event, item.id)}
+                                onDragEnd={() => {
+                                  setDraggedIssueId(null);
+                                  setDraggedIssueIds([]);
+                                }}
+                                onClick={() => setSelectedIssueId(item.id)}
+                                onDoubleClick={() => openTaskDialog(item.id)}
+                                className={cn(
+                                  'grid grid-cols-[40px_minmax(0,2.2fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_72px] items-center gap-3 border-b border-slate-200 px-3 py-2 text-left transition last:border-b-0 hover:bg-sky-50/60',
+                                  selectedIssueId === item.id ? 'bg-sky-50' : 'bg-white',
+                                  selectedIssueIdSet.has(item.id) && 'bg-sky-50/80',
+                                )}
+                              >
+                                <div className="flex items-center justify-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedIssueIdSet.has(item.id)}
+                                    onChange={(event) => selectIssue(item.id, event.target.checked)}
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="h-4 w-4 rounded border-slate-300 text-sky-600"
+                                  />
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="truncate text-sm font-medium text-slate-900">{item.issue.title}</span>
+                                    <span className="shrink-0 rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500">#{item.issue.number}</span>
+                                  </div>
+                                  <div className="mt-1 truncate text-xs text-slate-400">{item.issue.state === 'closed' ? 'Closed' : 'Open'} task</div>
+                                </div>
+                                <div className="truncate text-sm text-slate-600">{item.repository.full_name}</div>
+                                <div className="truncate text-sm text-slate-600">{issueProjectName(item.projectId)}</div>
+                                <div className="truncate text-sm text-slate-600">{issueSprintName(item.sprintId)}</div>
+                                <div className="flex min-w-0 items-center gap-2 text-sm text-slate-600">
+                                  {item.issue.assignee?.avatar_url ? (
+                                    <img
+                                      src={item.issue.assignee.avatar_url}
+                                      alt={item.issue.assignee.login}
+                                      className="h-5 w-5 rounded-full border border-slate-200"
+                                    />
+                                  ) : (
+                                    <UserCircle2 className="h-4 w-4 text-slate-400" />
+                                  )}
+                                  <span className="truncate">{issueAssignee(item.issue)}</span>
+                                </div>
+                                <div className="text-right text-xs text-slate-400">{item.issue.comments}</div>
+                              </div>
+                            ))}
+
+                            {issuesByStage[stage].length === 0 && (
+                              <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                                No tasks in {FLOW_STAGE_META[stage].label.toLowerCase()}.
+                              </div>
+                            )}
+                          </div>
+                        </section>
+                      ))}
+                    </div>
+                  </ScrollArea>
                 )}
               </div>
-            </ScrollArea>
+            )}
           </div>
         </div>
       </div>
@@ -796,7 +1291,7 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
               <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Sprint</label>
               <select value={newIssue.sprintId} onChange={(event) => setNewIssue((current) => ({ ...current, sprintId: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
                 <option value="">No sprint</option>
-                {workspace.sprints.map((sprint) => (
+                {availableNewIssueSprints.map((sprint) => (
                   <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
                 ))}
               </select>
@@ -827,7 +1322,10 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
           <div className="space-y-4">
             <Input value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} placeholder="Platform refresh" className="border-slate-200" />
             <Input value={newProjectDescription} onChange={(event) => setNewProjectDescription(event.target.value)} placeholder="What this project is coordinating" className="border-slate-200" />
-            <Input value={newProjectColor} onChange={(event) => setNewProjectColor(event.target.value)} placeholder="0ea5e9" className="border-slate-200 font-mono" />
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Color</label>
+              <input type="color" value={`#${normalizeHexColor(newProjectColor)}`} onChange={(event) => setNewProjectColor(event.target.value.replace('#', ''))} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-2 py-1" />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsCreateProjectOpen(false)}>Cancel</Button>
@@ -847,19 +1345,359 @@ export function ActivitiesView({ gitea, repositories }: ActivitiesViewProps) {
             <Input value={newSprintName} onChange={(event) => setNewSprintName(event.target.value)} placeholder="Sprint 14" className="border-slate-200" />
             <Input value={newSprintGoal} onChange={(event) => setNewSprintGoal(event.target.value)} placeholder="Goal for this sprint" className="border-slate-200" />
             <select value={newSprintProjectId} onChange={(event) => setNewSprintProjectId(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-              <option value="">No linked project</option>
+              <option value="">Select project</option>
+              {activeProjects.map((project) => (
+                <option key={project.id} value={project.id}>{project.name}</option>
+              ))}
+            </select>
+            <select value={newSprintClosureMode} onChange={(event) => setNewSprintClosureMode(event.target.value as ActivitySprintClosureMode)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+              <option value="manual">Close manually</option>
+              <option value="automatic">Close automatically by date</option>
+            </select>
+            {newSprintClosureMode === 'automatic' && (
+              <Input type="date" value={newSprintEndDate} onChange={(event) => setNewSprintEndDate(event.target.value)} className="border-slate-200" />
+            )}
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Color</label>
+              <input type="color" value={`#${normalizeHexColor(newSprintColor)}`} onChange={(event) => setNewSprintColor(event.target.value.replace('#', ''))} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-2 py-1" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCreateSprintOpen(false)}>Cancel</Button>
+            <Button onClick={handleCreateSprint} disabled={!newSprintName.trim() || !newSprintProjectId || (newSprintClosureMode === 'automatic' && !newSprintEndDate)} className="bg-sky-600 text-white hover:bg-sky-700">
+              <CalendarRange className="w-4 h-4 mr-2" /> Save sprint
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPlanningDialogOpen} onOpenChange={setIsPlanningDialogOpen}>
+        <DialogContent className="max-h-[88vh] overflow-hidden bg-white sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Planning Workspace</DialogTitle>
+          </DialogHeader>
+          <ScrollArea className="max-h-[calc(88vh-8rem)] pr-4">
+            <div className="space-y-8 pb-1">
+              <section className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-900">Projects</h3>
+                    <p className="text-sm text-slate-500">Create project buckets and close them when the initiative is done.</p>
+                  </div>
+                  <Button type="button" className="bg-sky-600 text-white hover:bg-sky-700" onClick={() => setIsCreateProjectOpen(true)}>
+                    <FolderPlus className="mr-2 h-4 w-4" /> New project
+                  </Button>
+                </div>
+
+                <div className="grid gap-3">
+                  {workspace.projects.length === 0 && (
+                    <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                      No projects created yet.
+                    </div>
+                  )}
+                  {activeProjects.map((project) => (
+                    <div key={project.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="h-3 w-3 rounded-full" style={{ backgroundColor: `#${project.color}` }} />
+                          <span className="text-sm font-semibold text-slate-900">{project.name}</span>
+                          <Badge className="bg-emerald-50 text-emerald-700 hover:bg-emerald-50">Open</Badge>
+                        </div>
+                        {project.description && <div className="mt-1 text-xs text-slate-500">{project.description}</div>}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" className="border-slate-200 bg-white" onClick={() => openEditProject(project)}>
+                          <Edit3 className="mr-2 h-4 w-4" /> Edit
+                        </Button>
+                        <Button type="button" variant="outline" className="border-slate-200 bg-white" onClick={() => toggleProjectClosed(project.id)}>
+                          <Lock className="mr-2 h-4 w-4" /> Close project
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  {closedProjects.map((project) => (
+                    <div key={project.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 opacity-80">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="h-3 w-3 rounded-full" style={{ backgroundColor: `#${project.color}` }} />
+                          <span className="text-sm font-semibold text-slate-900">{project.name}</span>
+                          <Badge variant="outline" className="border-slate-300 text-slate-500">Closed</Badge>
+                        </div>
+                        {project.description && <div className="mt-1 text-xs text-slate-500">{project.description}</div>}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" className="border-slate-200 bg-white" onClick={() => openEditProject(project)}>
+                          <Edit3 className="mr-2 h-4 w-4" /> Edit
+                        </Button>
+                        <Button type="button" variant="outline" className="border-slate-200 bg-white" onClick={() => toggleProjectClosed(project.id)}>
+                          <LockOpen className="mr-2 h-4 w-4" /> Reopen project
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-900">Sprints</h3>
+                    <p className="text-sm text-slate-500">Every sprint belongs to a project and can close manually or by time.</p>
+                  </div>
+                  <Button type="button" className="bg-sky-600 text-white hover:bg-sky-700" onClick={() => setIsCreateSprintOpen(true)} disabled={activeProjects.length === 0}>
+                    <CalendarRange className="mr-2 h-4 w-4" /> New sprint
+                  </Button>
+                </div>
+
+                {activeProjects.length === 0 && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    Create at least one open project before creating a sprint.
+                  </div>
+                )}
+
+                <div className="grid gap-3">
+                  {workspace.sprints.length === 0 && (
+                    <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                      No sprints created yet.
+                    </div>
+                  )}
+                  {activeSprints.map((sprint) => (
+                    <div key={sprint.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="h-3 w-3 rounded-full" style={{ backgroundColor: `#${sprint.color}` }} />
+                          <span className="text-sm font-semibold text-slate-900">{sprint.name}</span>
+                          <Badge className="bg-emerald-50 text-emerald-700 hover:bg-emerald-50">Open</Badge>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Project: {getProjectDefinition(sprint.projectId)?.name || humanizeActivityId(sprint.projectId)}
+                          {sprint.closureMode === 'automatic' && sprint.endDate ? ` · Auto closes on ${sprint.endDate}` : ' · Manual close'}
+                        </div>
+                        {sprint.goal && <div className="mt-1 text-xs text-slate-500">{sprint.goal}</div>}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" className="border-slate-200 bg-white" onClick={() => openEditSprint(sprint)}>
+                          <Edit3 className="mr-2 h-4 w-4" /> Edit
+                        </Button>
+                        <Button type="button" variant="outline" className="border-slate-200 bg-white" onClick={() => toggleSprintClosed(sprint.id)}>
+                          <Lock className="mr-2 h-4 w-4" /> Close sprint
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  {closedSprints.map((sprint) => (
+                    <div key={sprint.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 opacity-80">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="h-3 w-3 rounded-full" style={{ backgroundColor: `#${sprint.color}` }} />
+                          <span className="text-sm font-semibold text-slate-900">{sprint.name}</span>
+                          <Badge variant="outline" className="border-slate-300 text-slate-500">Closed</Badge>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Project: {getProjectDefinition(sprint.projectId)?.name || humanizeActivityId(sprint.projectId)}
+                          {sprint.closureMode === 'automatic' && sprint.endDate ? ` · Auto close date ${sprint.endDate}` : ' · Manual close'}
+                        </div>
+                        {sprint.goal && <div className="mt-1 text-xs text-slate-500">{sprint.goal}</div>}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" className="border-slate-200 bg-white" onClick={() => openEditSprint(sprint)}>
+                          <Edit3 className="mr-2 h-4 w-4" /> Edit
+                        </Button>
+                        <Button type="button" variant="outline" className="border-slate-200 bg-white" onClick={() => toggleSprintClosed(sprint.id)}>
+                          <LockOpen className="mr-2 h-4 w-4" /> Reopen sprint
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isEditProjectOpen} onOpenChange={setIsEditProjectOpen}>
+        <DialogContent className="sm:max-w-lg bg-white">
+          <DialogHeader>
+            <DialogTitle>Edit Project</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <Input value={editingProjectName} onChange={(event) => setEditingProjectName(event.target.value)} placeholder="Platform refresh" className="border-slate-200" />
+            <Input value={editingProjectDescription} onChange={(event) => setEditingProjectDescription(event.target.value)} placeholder="What this project is coordinating" className="border-slate-200" />
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Color</label>
+              <input type="color" value={`#${normalizeHexColor(editingProjectColor)}`} onChange={(event) => setEditingProjectColor(event.target.value.replace('#', ''))} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-2 py-1" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditProjectOpen(false)}>Cancel</Button>
+            <Button onClick={handleEditProject} disabled={!editingProjectName.trim()} className="bg-sky-600 text-white hover:bg-sky-700">
+              <Edit3 className="w-4 h-4 mr-2" /> Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isEditSprintOpen} onOpenChange={setIsEditSprintOpen}>
+        <DialogContent className="sm:max-w-lg bg-white">
+          <DialogHeader>
+            <DialogTitle>Edit Sprint</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <Input value={editingSprintName} onChange={(event) => setEditingSprintName(event.target.value)} placeholder="Sprint 14" className="border-slate-200" />
+            <Input value={editingSprintGoal} onChange={(event) => setEditingSprintGoal(event.target.value)} placeholder="Goal for this sprint" className="border-slate-200" />
+            <select value={editingSprintProjectId} onChange={(event) => setEditingSprintProjectId(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+              <option value="">Select project</option>
               {workspace.projects.map((project) => (
                 <option key={project.id} value={project.id}>{project.name}</option>
               ))}
             </select>
-            <Input value={newSprintColor} onChange={(event) => setNewSprintColor(event.target.value)} placeholder="f59e0b" className="border-slate-200 font-mono" />
+            <select value={editingSprintClosureMode} onChange={(event) => setEditingSprintClosureMode(event.target.value as ActivitySprintClosureMode)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+              <option value="manual">Close manually</option>
+              <option value="automatic">Close automatically by date</option>
+            </select>
+            {editingSprintClosureMode === 'automatic' && (
+              <Input type="date" value={editingSprintEndDate} onChange={(event) => setEditingSprintEndDate(event.target.value)} className="border-slate-200" />
+            )}
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Color</label>
+              <input type="color" value={`#${normalizeHexColor(editingSprintColor)}`} onChange={(event) => setEditingSprintColor(event.target.value.replace('#', ''))} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-2 py-1" />
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCreateSprintOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreateSprint} disabled={!newSprintName.trim()} className="bg-sky-600 text-white hover:bg-sky-700">
-              <CalendarRange className="w-4 h-4 mr-2" /> Save sprint
+            <Button variant="outline" onClick={() => setIsEditSprintOpen(false)}>Cancel</Button>
+            <Button onClick={handleEditSprint} disabled={!editingSprintName.trim() || !editingSprintProjectId || (editingSprintClosureMode === 'automatic' && !editingSprintEndDate)} className="bg-sky-600 text-white hover:bg-sky-700">
+              <Edit3 className="w-4 h-4 mr-2" /> Save changes
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isTaskDialogOpen && !!selectedIssue} onOpenChange={setIsTaskDialogOpen}>
+        <DialogContent className="max-h-[88vh] overflow-hidden bg-white sm:max-w-3xl">
+          {selectedIssue && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{selectedIssue.issue.title}</DialogTitle>
+              </DialogHeader>
+              <ScrollArea className="max-h-[calc(88vh-8rem)] pr-4">
+                <div className="space-y-5 pb-1">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.25em] text-slate-400">Selected task</div>
+                    <div className="mt-2 text-sm text-slate-500">{selectedIssue.repository.full_name} · Issue #{selectedIssue.issue.number}</div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Link to={`/repo/${selectedIssue.repository.owner.login}/${selectedIssue.repository.name}`} className="inline-flex">
+                      <Button variant="outline" className="border-slate-200 bg-white">
+                        Open Repo
+                      </Button>
+                    </Link>
+                  </div>
+
+                  <Card className="bg-slate-50 ring-slate-200/80">
+                    <CardHeader>
+                      <CardTitle>Workflow</CardTitle>
+                      <CardDescription>Moving the card also updates the linked issue state.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="grid grid-cols-2 gap-2">
+                      {FLOW_STAGES.map((stage) => (
+                        <Button
+                          key={stage}
+                          type="button"
+                          variant={selectedIssue.flowStage === stage ? 'default' : 'outline'}
+                          className={cn(selectedIssue.flowStage === stage ? 'bg-sky-600 text-white hover:bg-sky-700' : 'border-slate-200 bg-white')}
+                          disabled={syncingIssueId === selectedIssue.id}
+                          onClick={() => void syncIssueMetadata(selectedIssue, { flowStage: stage })}
+                        >
+                          {stage === 'done' ? <CheckCircle2 className="w-4 h-4 mr-2" /> : <Circle className="w-4 h-4 mr-2" />}
+                          {FLOW_STAGE_META[stage].label}
+                        </Button>
+                      ))}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-slate-50 ring-slate-200/80">
+                    <CardHeader>
+                      <CardTitle>Assignment</CardTitle>
+                      <CardDescription>Current developer responsible in Gitea.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3">
+                        {selectedIssue.issue.assignee?.avatar_url ? (
+                          <img
+                            src={selectedIssue.issue.assignee.avatar_url}
+                            alt={selectedIssue.issue.assignee.login}
+                            className="h-10 w-10 rounded-full border border-slate-200"
+                          />
+                        ) : (
+                          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-slate-50">
+                            <UserCircle2 className="h-5 w-5 text-slate-400" />
+                          </div>
+                        )}
+                        <div>
+                          <div className="text-sm font-medium text-slate-900">{issueAssignee(selectedIssue.issue)}</div>
+                          <div className="text-xs text-slate-500">
+                            {selectedIssue.issue.assignee ? 'Assignee synced from the repository issue.' : 'No developer assigned yet.'}
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-slate-50 ring-slate-200/80">
+                    <CardHeader>
+                      <CardTitle>Planning dimensions</CardTitle>
+                      <CardDescription>Projects and sprints sync back as repository labels.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Project</label>
+                        <select
+                          value={selectedIssue.projectId || ''}
+                          onChange={(event) => void syncIssueMetadata(selectedIssue, { projectId: event.target.value || null })}
+                          disabled={syncingIssueId === selectedIssue.id}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                        >
+                          <option value="">Unassigned</option>
+                          {workspace.projects.map((project) => (
+                            <option key={project.id} value={project.id}>{project.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Sprint</label>
+                        <select
+                          value={selectedIssue.sprintId || ''}
+                          onChange={(event) => void syncIssueMetadata(selectedIssue, { sprintId: event.target.value || null })}
+                          disabled={syncingIssueId === selectedIssue.id}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                        >
+                          <option value="">No sprint</option>
+                          {availableSelectedIssueSprints.map((sprint) => (
+                            <option key={sprint.id} value={sprint.id}>{sprint.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-slate-50 ring-slate-200/80">
+                    <CardHeader>
+                      <CardTitle>Issue body</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <MarkdownRenderer
+                        content={selectedIssue.issue.body}
+                        emptyFallback="_No issue description._"
+                        className="text-sm"
+                      />
+                    </CardContent>
+                  </Card>
+                </div>
+              </ScrollArea>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

@@ -83,6 +83,25 @@ interface RepoViewProps {
   gitea: GiteaService;
 }
 
+interface DeployIntegrationStatus {
+  configured: boolean;
+  authenticated: boolean;
+  baseUrl: string | null;
+}
+
+interface DeployProjectResponse {
+  ok: boolean;
+  project?: {
+    id?: string;
+    name?: string;
+  };
+  baseUrl?: string;
+}
+
+function isDeployProjectResponse(data: unknown): data is DeployProjectResponse {
+  return Boolean(data) && typeof data === 'object' && 'ok' in (data as Record<string, unknown>);
+}
+
 function encodeBase64(content: string) {
   const bytes = new TextEncoder().encode(content);
   let binary = '';
@@ -244,6 +263,22 @@ export function RepoView({ gitea }: RepoViewProps) {
   const [forkOrganization, setForkOrganization] = useState('');
   const [forkName, setForkName] = useState('');
   const [activeTab, setActiveTab] = useState('code');
+  const [isDeployDialogOpen, setIsDeployDialogOpen] = useState(false);
+  const [deployStatus, setDeployStatus] = useState<DeployIntegrationStatus | null>(null);
+  const [deployProjectName, setDeployProjectName] = useState('');
+  const [deployBranch, setDeployBranch] = useState('');
+  const [deployInstallCommand, setDeployInstallCommand] = useState('npm ci');
+  const [deployBuildCommand, setDeployBuildCommand] = useState('npm run build');
+  const [deployArtifactPath, setDeployArtifactPath] = useState('dist');
+  const [deployAutoBuild, setDeployAutoBuild] = useState(true);
+  const [deployWebhookSecret, setDeployWebhookSecret] = useState('');
+  const [deployHostId, setDeployHostId] = useState('');
+  const [deployComposeFilePath, setDeployComposeFilePath] = useState('docker-compose.yml');
+  const [deployAutoDeploy, setDeployAutoDeploy] = useState(false);
+  const [deployEnabled, setDeployEnabled] = useState(true);
+  const [deployError, setDeployError] = useState<string | null>(null);
+  const [deploySubmitting, setDeploySubmitting] = useState(false);
+  const [deployCreatedProject, setDeployCreatedProject] = useState<{ id?: string; name?: string; baseUrl?: string } | null>(null);
 
   useEffect(() => {
     if (owner && repoName) {
@@ -265,12 +300,33 @@ export function RepoView({ gitea }: RepoViewProps) {
   }, [repository, currentBranch]);
 
   useEffect(() => {
+    if (repository) {
+      setDeployProjectName(repository.full_name);
+      setDeployBranch(repository.default_branch);
+    }
+  }, [repository]);
+
+  useEffect(() => {
     if (selectedCommit) {
       loadCommitStatuses(selectedCommit.sha);
     } else {
       setCommitStatuses([]);
     }
   }, [selectedCommit]);
+
+  const loadDeployStatus = async () => {
+    try {
+      const response = await fetch('/api/integrations/deploy/status', {
+        method: 'GET',
+        credentials: 'same-origin',
+      });
+      const data = await response.json() as DeployIntegrationStatus;
+      setDeployStatus(data);
+    } catch (error) {
+      console.error('Failed to load Deploy integration status:', error);
+      setDeployStatus({ configured: false, authenticated: false, baseUrl: null });
+    }
+  };
 
   const loadRepo = async () => {
     setLoading(true);
@@ -616,6 +672,78 @@ export function RepoView({ gitea }: RepoViewProps) {
     }
   };
 
+  const openDeployDialog = async () => {
+    setDeployError(null);
+    setDeployCreatedProject(null);
+    setIsDeployDialogOpen(true);
+    await loadDeployStatus();
+  };
+
+  const handleCreateDeployProject = async () => {
+    if (!owner || !repoName || !repository || !deployProjectName.trim() || !deployBranch.trim()) {
+      return;
+    }
+
+    setDeploySubmitting(true);
+    setDeployError(null);
+    setDeployCreatedProject(null);
+
+    try {
+      const response = await fetch('/api/integrations/deploy/projects', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          owner,
+          repo: repoName,
+          payload: {
+            name: deployProjectName.trim(),
+            repoUrl: repository.clone_url,
+            branch: deployBranch.trim(),
+            steps: [
+              { name: 'Install dependencies', command: deployInstallCommand.trim() },
+              { name: 'Build', command: deployBuildCommand.trim() },
+            ].filter((step) => step.command),
+            artifactPaths: deployArtifactPath.trim() ? [{ path: deployArtifactPath.trim() }] : [],
+            autoBuild: deployAutoBuild,
+            webhookSecret: deployWebhookSecret.trim() || undefined,
+            deploymentSettings: deployHostId.trim()
+              ? {
+                  hostId: deployHostId.trim(),
+                  sourceType: 'repo',
+                  composeFilePath: deployComposeFilePath.trim() || 'docker-compose.yml',
+                  branchFilters: [deployBranch.trim()],
+                  autoDeploy: deployAutoDeploy,
+                  enabled: deployEnabled,
+                }
+              : undefined,
+          },
+        }),
+      });
+
+      const data = await response.json().catch(() => null) as DeployProjectResponse | { error?: string } | null;
+      if (!response.ok) {
+        throw new Error((data as any)?.error || `Deploy integration failed (${response.status})`);
+      }
+
+      if (isDeployProjectResponse(data)) {
+        setDeployCreatedProject({
+          id: data.project?.id,
+          name: data.project?.name,
+          baseUrl: data.baseUrl,
+        });
+      } else {
+        setDeployCreatedProject(null);
+      }
+    } catch (error: any) {
+      setDeployError(error.message || 'Failed to register repository in Deploy-.');
+    } finally {
+      setDeploySubmitting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-8 space-y-6">
@@ -633,184 +761,297 @@ export function RepoView({ gitea }: RepoViewProps) {
   return (
     <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden bg-slate-100">
       {/* Repo Header */}
-      <header className="bg-white px-8 py-4 border-b border-slate-200 flex justify-between items-center shrink-0">
-        <div className="flex items-center gap-2 text-sm text-slate-500">
-          <span>{repository.owner.login}</span>
-          <span className="text-slate-300">/</span>
-          <span className="font-bold text-slate-900">{repository.name}</span>
-          <Badge variant="outline" className="ml-2 bg-slate-50 text-slate-600 border-slate-200 text-[10px] uppercase font-bold">
-            {repository.private ? 'Private' : 'Public'}
-          </Badge>
-        </div>
-        <div className="flex gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleToggleStar}
-            disabled={engagementSaving === 'star'}
-            className={cn(
-              "h-8 border-slate-200 hover:bg-slate-50",
-              isStarred ? "text-amber-600 bg-amber-50 border-amber-100 hover:bg-amber-100" : "text-slate-600"
-            )}
-          >
-            <Star className={cn("w-3.5 h-3.5 mr-2", isStarred && "fill-current")} /> {isStarred ? 'Starred' : 'Star'} ({repository.stars_count})
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleToggleWatch}
-            disabled={engagementSaving === 'watch'}
-            className={cn(
-              "h-8 border-slate-200 hover:bg-slate-50",
-              isWatching ? "text-sky-600 bg-sky-50 border-sky-100 hover:bg-sky-100" : "text-slate-600"
-            )}
-          >
-            <Eye className="w-3.5 h-3.5 mr-2" /> {isWatching ? 'Watching' : 'Watch'} ({repository.watchers_count})
-          </Button>
-          <Dialog open={isForkDialogOpen} onOpenChange={setIsForkDialogOpen}>
+      <header className="shrink-0 border-b border-slate-200 bg-white/95 px-6 py-4 backdrop-blur xl:px-8">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
+              <span className="truncate">{repository.owner.login}</span>
+              <span className="text-slate-300">/</span>
+              <span className="truncate font-bold text-slate-900">{repository.name}</span>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="bg-slate-50 text-slate-600 border-slate-200 text-[10px] uppercase font-bold">
+                {repository.private ? 'Private' : 'Public'}
+              </Badge>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] text-slate-500">
+                Default branch: <span className="font-medium text-slate-700">{repository.default_branch}</span>
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 lg:justify-end">
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setIsForkDialogOpen(true)}
-              className="h-8 border-slate-200 text-slate-600 hover:bg-slate-50"
+              onClick={handleToggleStar}
+              disabled={engagementSaving === 'star'}
+              className={cn(
+                "h-8 border-slate-200 hover:bg-slate-50",
+                isStarred ? "text-amber-600 bg-amber-50 border-amber-100 hover:bg-amber-100" : "text-slate-600"
+              )}
             >
-              <GitFork className="w-3.5 h-3.5 mr-2" /> Fork ({repository.forks_count})
+              <Star className={cn("w-3.5 h-3.5 mr-2", isStarred && "fill-current")} /> {isStarred ? 'Starred' : 'Star'} ({repository.stars_count})
             </Button>
-            <DialogContent className="sm:max-w-xl bg-white">
-              <DialogHeader>
-                <DialogTitle>Fork Repository</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-5">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Name</label>
-                    <Input
-                      value={forkName}
-                      onChange={(event) => setForkName(event.target.value)}
-                      placeholder={repository.name}
-                      className="h-10 border-slate-200"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Organization</label>
-                    <Input
-                      value={forkOrganization}
-                      onChange={(event) => setForkOrganization(event.target.value)}
-                      placeholder="optional"
-                      className="h-10 border-slate-200"
-                    />
-                  </div>
-                </div>
-                <div className="bg-slate-50 border border-slate-100 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-                    <span className="text-sm font-bold text-slate-900">Existing forks</span>
-                    <Button variant="ghost" size="sm" onClick={loadForks} className="h-7 text-slate-500">
-                      Refresh
-                    </Button>
-                  </div>
-                  <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
-                    {forks.map((fork) => (
-                      <Link
-                        key={fork.id}
-                        to={`/repo/${fork.owner.login}/${fork.name}`}
-                        onClick={() => setIsForkDialogOpen(false)}
-                        className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-white"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-sm font-bold text-slate-900 truncate">{fork.full_name}</div>
-                          <div className="text-xs text-slate-400 truncate">{fork.description || 'No description'}</div>
-                        </div>
-                        <Badge variant="outline" className="border-slate-200 text-slate-500 text-[10px]">{fork.private ? 'Private' : 'Public'}</Badge>
-                      </Link>
-                    ))}
-                    {forks.length === 0 && <div className="p-6 text-center text-sm text-slate-400">No forks found</div>}
-                  </div>
-                </div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsForkDialogOpen(false)} className="border-slate-200 text-slate-600">Cancel</Button>
-                <Button onClick={handleCreateFork} disabled={saving} className="bg-sky-600 text-white hover:bg-sky-700">
-                  <GitFork className="w-3.5 h-3.5 mr-2" /> {saving ? 'Forking...' : 'Create Fork'}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  size="sm"
-                  className="h-8 bg-slate-900 text-white hover:bg-slate-800"
-                >
-                  {copiedTarget ? <Check className="w-3.5 h-3.5 mr-2" /> : <Copy className="w-3.5 h-3.5 mr-2" />}
-                  Code
-                </Button>
-              }
-            />
-            <DropdownMenuContent align="end" className="w-[340px] bg-white">
-              <div className="px-2 py-1 text-xs font-medium text-slate-500">Clone repository</div>
-
-              <div className="px-2 py-1.5 space-y-2">
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-2 space-y-1">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">HTTPS</div>
-                  <div className="font-mono text-[10px] text-slate-600 break-all">{repository.clone_url}</div>
-                </div>
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-2 space-y-1">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">SSH</div>
-                  <div className="font-mono text-[10px] text-slate-600 break-all">{repository.ssh_url}</div>
-                </div>
-              </div>
-
-              <DropdownMenuItem onClick={() => copyToClipboard(repository.clone_url, 'https')}>
-                {copiedTarget === 'https' ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
-                Copy HTTPS URL
-                <DropdownMenuShortcut>HTTPS</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => copyToClipboard(repository.ssh_url, 'ssh')}>
-                {copiedTarget === 'ssh' ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
-                Copy SSH URL
-                <DropdownMenuShortcut>SSH</DropdownMenuShortcut>
-              </DropdownMenuItem>
-
-              <DropdownMenuSeparator />
-              <div className="px-2 py-1 text-xs font-medium text-slate-500">Open in IDE</div>
-              <DropdownMenuItem onClick={() => openWithProtocol(`vscode://vscode.git/clone?url=${encodeURIComponent(repository.clone_url)}`)}>
-                <ExternalLink className="w-4 h-4" />
-                Open with VS Code
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openWithProtocol(`vscodium://vscode.git/clone?url=${encodeURIComponent(repository.clone_url)}`)}>
-                <ExternalLink className="w-4 h-4" />
-                Open with VSCodium
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => openWithProtocol(`jetbrains://idea/checkout/git?checkout.repo=${encodeURIComponent(repository.clone_url)}&checkout.branch=${encodeURIComponent(currentBranch || repository.default_branch)}`)}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleToggleWatch}
+              disabled={engagementSaving === 'watch'}
+              className={cn(
+                "h-8 border-slate-200 hover:bg-slate-50",
+                isWatching ? "text-sky-600 bg-sky-50 border-sky-100 hover:bg-sky-100" : "text-slate-600"
+              )}
+            >
+              <Eye className="w-3.5 h-3.5 mr-2" /> {isWatching ? 'Watching' : 'Watch'} ({repository.watchers_count})
+            </Button>
+            <Dialog open={isForkDialogOpen} onOpenChange={setIsForkDialogOpen}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsForkDialogOpen(true)}
+                className="h-8 border-slate-200 text-slate-600 hover:bg-slate-50"
               >
-                <ExternalLink className="w-4 h-4" />
-                Open with IntelliJ IDEA
-              </DropdownMenuItem>
+                <GitFork className="w-3.5 h-3.5 mr-2" /> Fork ({repository.forks_count})
+              </Button>
+              <DialogContent className="sm:max-w-xl bg-white">
+                <DialogHeader>
+                  <DialogTitle>Fork Repository</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-5">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Name</label>
+                      <Input
+                        value={forkName}
+                        onChange={(event) => setForkName(event.target.value)}
+                        placeholder={repository.name}
+                        className="h-10 border-slate-200"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Organization</label>
+                      <Input
+                        value={forkOrganization}
+                        onChange={(event) => setForkOrganization(event.target.value)}
+                        placeholder="optional"
+                        className="h-10 border-slate-200"
+                      />
+                    </div>
+                  </div>
+                  <div className="bg-slate-50 border border-slate-100 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                      <span className="text-sm font-bold text-slate-900">Existing forks</span>
+                      <Button variant="ghost" size="sm" onClick={loadForks} className="h-7 text-slate-500">
+                        Refresh
+                      </Button>
+                    </div>
+                    <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                      {forks.map((fork) => (
+                        <Link
+                          key={fork.id}
+                          to={`/repo/${fork.owner.login}/${fork.name}`}
+                          onClick={() => setIsForkDialogOpen(false)}
+                          className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-white"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-bold text-slate-900 truncate">{fork.full_name}</div>
+                            <div className="text-xs text-slate-400 truncate">{fork.description || 'No description'}</div>
+                          </div>
+                          <Badge variant="outline" className="border-slate-200 text-slate-500 text-[10px]">{fork.private ? 'Private' : 'Public'}</Badge>
+                        </Link>
+                      ))}
+                      {forks.length === 0 && <div className="p-6 text-center text-sm text-slate-400">No forks found</div>}
+                    </div>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsForkDialogOpen(false)} className="border-slate-200 text-slate-600">Cancel</Button>
+                  <Button onClick={handleCreateFork} disabled={saving} className="bg-sky-600 text-white hover:bg-sky-700">
+                    <GitFork className="w-3.5 h-3.5 mr-2" /> {saving ? 'Forking...' : 'Create Fork'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            <Dialog open={isDeployDialogOpen} onOpenChange={setIsDeployDialogOpen}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void openDeployDialog()}
+                className="h-8 border-slate-200 text-slate-600 hover:bg-slate-50"
+              >
+                <ExternalLink className="w-3.5 h-3.5 mr-2" /> Send to Deploy-
+              </Button>
+              <DialogContent className="sm:max-w-2xl bg-white">
+                <DialogHeader>
+                  <DialogTitle>Register In Deploy-</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-5">
+                  {!deployStatus?.configured && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                      Deploy integration is not configured on this server. Set `DEPLOY_BASE_URL` and `DEPLOY_API_TOKEN` first.
+                    </div>
+                  )}
+                  {deployError && (
+                    <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                      {deployError}
+                    </div>
+                  )}
+                  {deployCreatedProject && (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                      Created Deploy project {deployCreatedProject.name || deployCreatedProject.id}.
+                      {deployCreatedProject.baseUrl && (
+                        <button
+                          type="button"
+                          className="ml-2 underline"
+                          onClick={() => openExternalUrl(deployCreatedProject.baseUrl!)}
+                        >
+                          Open Deploy-
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Project name</label>
+                      <Input value={deployProjectName} onChange={(event) => setDeployProjectName(event.target.value)} className="h-10 border-slate-200" />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Branch</label>
+                      <Input value={deployBranch} onChange={(event) => setDeployBranch(event.target.value)} className="h-10 border-slate-200" />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Install command</label>
+                      <Input value={deployInstallCommand} onChange={(event) => setDeployInstallCommand(event.target.value)} className="h-10 border-slate-200 font-mono text-xs" />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Build command</label>
+                      <Input value={deployBuildCommand} onChange={(event) => setDeployBuildCommand(event.target.value)} className="h-10 border-slate-200 font-mono text-xs" />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Artifact path</label>
+                      <Input value={deployArtifactPath} onChange={(event) => setDeployArtifactPath(event.target.value)} className="h-10 border-slate-200 font-mono text-xs" />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Webhook secret</label>
+                      <Input value={deployWebhookSecret} onChange={(event) => setDeployWebhookSecret(event.target.value)} placeholder="Optional but recommended for auto-build" className="h-10 border-slate-200 font-mono text-xs" />
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="text-sm font-semibold text-slate-900">Optional deployment settings</div>
+                    <div className="mt-3 grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Host id</label>
+                        <Input value={deployHostId} onChange={(event) => setDeployHostId(event.target.value)} placeholder="Existing Deploy host id" className="h-10 border-slate-200 bg-white font-mono text-xs" />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Compose file path</label>
+                        <Input value={deployComposeFilePath} onChange={(event) => setDeployComposeFilePath(event.target.value)} className="h-10 border-slate-200 bg-white font-mono text-xs" />
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-4 text-sm text-slate-600">
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={deployAutoBuild} onChange={(event) => setDeployAutoBuild(event.target.checked)} />
+                        Auto-build
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={deployAutoDeploy} onChange={(event) => setDeployAutoDeploy(event.target.checked)} />
+                        Auto-deploy
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={deployEnabled} onChange={(event) => setDeployEnabled(event.target.checked)} />
+                        Deployment enabled
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsDeployDialogOpen(false)} className="border-slate-200 text-slate-600">Close</Button>
+                  <Button
+                    onClick={() => void handleCreateDeployProject()}
+                    disabled={!deployStatus?.configured || deploySubmitting || !deployProjectName.trim() || !deployBranch.trim()}
+                    className="bg-sky-600 text-white hover:bg-sky-700"
+                  >
+                    {deploySubmitting ? 'Sending...' : 'Create Deploy Project'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    size="sm"
+                    className="h-8 bg-slate-900 text-white hover:bg-slate-800"
+                  >
+                    {copiedTarget ? <Check className="w-3.5 h-3.5 mr-2" /> : <Copy className="w-3.5 h-3.5 mr-2" />}
+                    Code
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="w-[340px] bg-white">
+                <div className="px-2 py-1 text-xs font-medium text-slate-500">Clone repository</div>
 
-              <DropdownMenuSeparator />
-              <div className="px-2 py-1 text-xs font-medium text-slate-500">Download</div>
-              <DropdownMenuItem onClick={() => openExternalUrl(`${repository.html_url.replace(/\/$/, '')}/archive/${encodeURIComponent(currentBranch || repository.default_branch)}.zip`)}>
-                <Download className="w-4 h-4" />
-                Download .zip
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openExternalUrl(`${repository.html_url.replace(/\/$/, '')}/archive/${encodeURIComponent(currentBranch || repository.default_branch)}.tar.gz`)}>
-                <Download className="w-4 h-4" />
-                Download .tar.gz
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openExternalUrl(`${repository.html_url.replace(/\/$/, '')}/archive/${encodeURIComponent(currentBranch || repository.default_branch)}.bundle`)}>
-                <Download className="w-4 h-4" />
-                Download .bundle
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <div className="px-2 py-1.5 space-y-2">
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-2 space-y-1">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">HTTPS</div>
+                    <div className="font-mono text-[10px] text-slate-600 break-all">{repository.clone_url}</div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-2 space-y-1">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">SSH</div>
+                    <div className="font-mono text-[10px] text-slate-600 break-all">{repository.ssh_url}</div>
+                  </div>
+                </div>
+
+                <DropdownMenuItem onClick={() => copyToClipboard(repository.clone_url, 'https')}>
+                  {copiedTarget === 'https' ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                  Copy HTTPS URL
+                  <DropdownMenuShortcut>HTTPS</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => copyToClipboard(repository.ssh_url, 'ssh')}>
+                  {copiedTarget === 'ssh' ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                  Copy SSH URL
+                  <DropdownMenuShortcut>SSH</DropdownMenuShortcut>
+                </DropdownMenuItem>
+
+                <DropdownMenuSeparator />
+                <div className="px-2 py-1 text-xs font-medium text-slate-500">Open in IDE</div>
+                <DropdownMenuItem onClick={() => openWithProtocol(`vscode://vscode.git/clone?url=${encodeURIComponent(repository.clone_url)}`)}>
+                  <ExternalLink className="w-4 h-4" />
+                  Open with VS Code
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openWithProtocol(`vscodium://vscode.git/clone?url=${encodeURIComponent(repository.clone_url)}`)}>
+                  <ExternalLink className="w-4 h-4" />
+                  Open with VSCodium
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => openWithProtocol(`jetbrains://idea/checkout/git?checkout.repo=${encodeURIComponent(repository.clone_url)}&checkout.branch=${encodeURIComponent(currentBranch || repository.default_branch)}`)}
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  Open with IntelliJ IDEA
+                </DropdownMenuItem>
+
+                <DropdownMenuSeparator />
+                <div className="px-2 py-1 text-xs font-medium text-slate-500">Download</div>
+                <DropdownMenuItem onClick={() => openExternalUrl(`${repository.html_url.replace(/\/$/, '')}/archive/${encodeURIComponent(currentBranch || repository.default_branch)}.zip`)}>
+                  <Download className="w-4 h-4" />
+                  Download .zip
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openExternalUrl(`${repository.html_url.replace(/\/$/, '')}/archive/${encodeURIComponent(currentBranch || repository.default_branch)}.tar.gz`)}>
+                  <Download className="w-4 h-4" />
+                  Download .tar.gz
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openExternalUrl(`${repository.html_url.replace(/\/$/, '')}/archive/${encodeURIComponent(currentBranch || repository.default_branch)}.bundle`)}>
+                  <Download className="w-4 h-4" />
+                  Download .bundle
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </header>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
-        <div className="border-b border-slate-200 px-8 bg-white shrink-0">
-          <TabsList className="bg-transparent h-12 p-0 gap-8">
+        <div className="shrink-0 overflow-x-auto border-b border-slate-200 bg-white px-6 xl:px-8">
+          <TabsList className="h-12 min-w-max gap-6 bg-transparent p-0">
             <TabsTrigger value="code" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <LayoutIcon className="w-3.5 h-3.5 mr-2" /> Code
             </TabsTrigger>
@@ -848,7 +1089,7 @@ export function RepoView({ gitea }: RepoViewProps) {
           <ScrollArea className="flex-1 min-h-0">
             <div className="p-8 max-w-6xl mx-auto space-y-6">
               {/* Stats Bar */}
-              <div className="grid grid-cols-4 gap-8 p-6 bg-white border border-slate-200 rounded-xl shadow-sm">
+              <div className="grid gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:grid-cols-2 xl:grid-cols-4">
                 <div className="flex flex-col">
                   <span className="text-lg font-bold text-slate-900">{commits.length}+</span>
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Commits</span>
@@ -868,7 +1109,7 @@ export function RepoView({ gitea }: RepoViewProps) {
               </div>
 
               {/* Branch & Actions */}
-              <div className="flex justify-between items-center">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <DropdownMenu>
                   <DropdownMenuTrigger render={
                     <Button variant="outline" size="sm" className="h-9 px-3 bg-slate-200/50 border border-slate-200 rounded-lg text-xs font-bold text-slate-600 flex items-center gap-2 hover:bg-slate-200">
@@ -893,7 +1134,7 @@ export function RepoView({ gitea }: RepoViewProps) {
                     ))}
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button variant="outline" size="sm" onClick={openGoToFile} className="h-8 border-slate-200 text-slate-600">
                     <Search className="w-3.5 h-3.5 mr-2" /> Go to File
                   </Button>
@@ -907,15 +1148,15 @@ export function RepoView({ gitea }: RepoViewProps) {
               <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
                 {!selectedFile ? (
                   <div className="flex flex-col">
-                    <div className="bg-slate-50 p-4 border-b border-slate-200 flex justify-between items-center">
-                      <div className="text-xs text-slate-600">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 p-4">
+                      <div className="min-w-0 text-xs text-slate-600">
                         <span className="font-bold text-slate-900">{commits[0]?.author?.login || commits[0]?.commit.author.name}</span> {commits[0]?.commit.message.split('\n')[0]}
                       </div>
                       <div className="text-[10px] text-slate-400">
                         Latest commit <span className="font-bold text-slate-600">{commits[0]?.sha.substring(0, 7)}</span> {commits[0] ? new Date(commits[0].commit.author.date).toLocaleDateString() : ''}
                       </div>
                     </div>
-                    <div className="flex items-center px-4 py-3 bg-white border-b border-slate-100 gap-4">
+                    <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 bg-white px-4 py-3">
                       {currentPath && (
                         <Button variant="ghost" size="icon" onClick={handleBack} className="h-7 w-7 shrink-0 hover:bg-slate-100">
                           <ArrowLeft className="w-3.5 h-3.5" />
@@ -943,7 +1184,7 @@ export function RepoView({ gitea }: RepoViewProps) {
                           );
                         })}
                       </div>
-                      <div className="relative w-48 shrink-0">
+                      <div className="relative min-w-[220px] flex-1 sm:max-w-[240px] sm:flex-none">
                         <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
                         <Input 
                           placeholder="Search files..." 
@@ -953,50 +1194,52 @@ export function RepoView({ gitea }: RepoViewProps) {
                         />
                       </div>
                     </div>
-                    <table className="w-full">
-                      <tbody>
-                        {filteredContents.map((item) => (
-                          <tr 
-                            key={item.path} 
-                            onClick={() => handlePathClick(item.path, item.type)}
-                            className="border-b border-slate-50 hover:bg-slate-50/50 cursor-pointer transition-colors"
-                          >
-                            <td className="px-4 py-3">
-                              <div className={cn("flex items-center gap-3 text-sm font-medium", item.type === 'dir' ? 'text-sky-700' : 'text-slate-700')}>
-                                {getExplorerIcon(item.name, item.type, 'w-4 h-4 shrink-0')}
-                                <span className="truncate">{item.name}</span>
-                                <span className={cn(
-                                  'ml-1 shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none',
-                                  item.type === 'dir'
-                                    ? 'border-amber-200 bg-amber-50 text-amber-700'
-                                    : 'border-slate-200 bg-slate-50 text-slate-500'
-                                )}>
-                                  {getFileBadgeLabel(item.name, item.type)}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-3 text-sm text-slate-500 w-1/2">
-                              Initial folder structure setup
-                            </td>
-                            <td className="px-4 py-3 text-[11px] text-slate-400 text-right">
-                              2 months ago
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[760px]">
+                        <tbody>
+                          {filteredContents.map((item) => (
+                            <tr 
+                              key={item.path} 
+                              onClick={() => handlePathClick(item.path, item.type)}
+                              className="border-b border-slate-50 hover:bg-slate-50/50 cursor-pointer transition-colors"
+                            >
+                              <td className="px-4 py-3">
+                                <div className={cn("flex items-center gap-3 text-sm font-medium", item.type === 'dir' ? 'text-sky-700' : 'text-slate-700')}>
+                                  {getExplorerIcon(item.name, item.type, 'w-4 h-4 shrink-0')}
+                                  <span className="truncate">{item.name}</span>
+                                  <span className={cn(
+                                    'ml-1 shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none',
+                                    item.type === 'dir'
+                                      ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                      : 'border-slate-200 bg-slate-50 text-slate-500'
+                                  )}>
+                                    {getFileBadgeLabel(item.name, item.type)}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="w-1/2 px-4 py-3 text-sm text-slate-500">
+                                Initial folder structure setup
+                              </td>
+                              <td className="px-4 py-3 text-right text-[11px] text-slate-400">
+                                2 months ago
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 ) : (
-                  <div className="flex flex-col h-[600px]">
-                    <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-white">
-                      <div className="flex items-center gap-3">
+                  <div className="flex h-[min(72vh,56rem)] min-h-[34rem] flex-col">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white p-4">
+                      <div className="flex min-w-0 items-center gap-3">
                         <Button variant="ghost" size="icon" onClick={() => setSelectedFile(null)} className="h-8 w-8 hover:bg-slate-100">
                           <ArrowLeft className="w-4 h-4" />
                         </Button>
-                    <div className="text-xs font-medium text-slate-500 flex items-center gap-1">
+                    <div className="flex min-w-0 items-center gap-1 text-xs font-medium text-slate-500">
                       <button 
                         onClick={() => handleBreadcrumbClick('')}
-                        className="hover:text-sky-600 hover:underline transition-colors"
+                        className="shrink-0 hover:text-sky-600 hover:underline transition-colors"
                       >
                         {repository.name}
                       </button>
@@ -1007,7 +1250,7 @@ export function RepoView({ gitea }: RepoViewProps) {
                             <span className="text-slate-300">/</span>
                             <button 
                               onClick={() => handleBreadcrumbClick(path)}
-                              className="hover:text-sky-600 hover:underline transition-colors"
+                              className="truncate hover:text-sky-600 hover:underline transition-colors"
                             >
                               {part}
                             </button>
@@ -1015,15 +1258,15 @@ export function RepoView({ gitea }: RepoViewProps) {
                         );
                       })}
                       <span className="text-slate-300">/</span>
-                      <span className="text-slate-900 font-bold"> {selectedFile.name}</span>
+                      <span className="truncate text-slate-900 font-bold"> {selectedFile.name}</span>
                     </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
                         <Input
                           value={commitMessage}
                           onChange={(event) => setCommitMessage(event.target.value)}
                           placeholder="Commit message"
-                          className="h-8 w-64 border-slate-200 text-xs"
+                          className="h-8 min-w-[220px] flex-1 border-slate-200 text-xs lg:w-64 lg:flex-none"
                         />
                         <Button
                           variant="outline"
@@ -1068,7 +1311,7 @@ export function RepoView({ gitea }: RepoViewProps) {
               </div>
 
               {/* README Preview */}
-              <div className="p-6 bg-white border border-slate-200 rounded-xl shadow-sm">
+              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
                 <h3 className="text-sm font-bold text-slate-900 mb-4">{readmeName || 'README'}</h3>
                 <div className="h-px bg-slate-100 mb-6" />
                 {readmeContent ? (
@@ -1084,14 +1327,14 @@ export function RepoView({ gitea }: RepoViewProps) {
         <TabsContent value="history" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
           <ScrollArea className="flex-1 min-h-0">
             <div className="p-8 max-w-6xl mx-auto space-y-6">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-1">
                   <h2 className="text-xl font-bold text-slate-900">Commit History</h2>
                   <div className="text-xs text-slate-500 font-mono">
                     Showing {filteredCommits.length} of {commits.length} commits
                   </div>
                 </div>
-                <div className="relative w-64">
+                <div className="relative w-full max-w-sm">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <Input 
                     placeholder="Search commits by author, message, or SHA..." 
@@ -1105,41 +1348,43 @@ export function RepoView({ gitea }: RepoViewProps) {
               <GitGraph commits={filteredCommits} onCommitClick={setSelectedCommit} />
 
               <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                <table className="w-full">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="px-4 py-2 text-left text-[10px] font-bold text-slate-400 uppercase tracking-wider">Author</th>
-                      <th className="px-4 py-2 text-left text-[10px] font-bold text-slate-400 uppercase tracking-wider">Commit</th>
-                      <th className="px-4 py-2 text-left text-[10px] font-bold text-slate-400 uppercase tracking-wider">Message</th>
-                      <th className="px-4 py-2 text-right text-[10px] font-bold text-slate-400 uppercase tracking-wider">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredCommits.map((commit) => (
-                      <tr 
-                        key={commit.sha} 
-                        onClick={() => setSelectedCommit(commit)}
-                        className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors cursor-pointer"
-                      >
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <img src={commit.author?.avatar_url} className="w-5 h-5 rounded-full" alt="" />
-                            <span className="text-xs font-medium">{commit.author?.login || commit.commit.author.name}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <code className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 font-mono">{commit.sha.substring(0, 7)}</code>
-                        </td>
-                        <td className="px-4 py-3 text-xs text-slate-700 font-medium">
-                          {commit.commit.message.split('\n')[0]}
-                        </td>
-                        <td className="px-4 py-3 text-[10px] text-slate-400 text-right">
-                          {new Date(commit.commit.author.date).toLocaleString()}
-                        </td>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px]">
+                    <thead className="bg-slate-50 border-b border-slate-200">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-[10px] font-bold text-slate-400 uppercase tracking-wider">Author</th>
+                        <th className="px-4 py-2 text-left text-[10px] font-bold text-slate-400 uppercase tracking-wider">Commit</th>
+                        <th className="px-4 py-2 text-left text-[10px] font-bold text-slate-400 uppercase tracking-wider">Message</th>
+                        <th className="px-4 py-2 text-right text-[10px] font-bold text-slate-400 uppercase tracking-wider">Date</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {filteredCommits.map((commit) => (
+                        <tr 
+                          key={commit.sha} 
+                          onClick={() => setSelectedCommit(commit)}
+                          className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors cursor-pointer"
+                        >
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <img src={commit.author?.avatar_url} className="w-5 h-5 rounded-full" alt="" />
+                              <span className="text-xs font-medium">{commit.author?.login || commit.commit.author.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <code className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 font-mono">{commit.sha.substring(0, 7)}</code>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-700 font-medium">
+                            {commit.commit.message.split('\n')[0]}
+                          </td>
+                          <td className="px-4 py-3 text-[10px] text-slate-400 text-right">
+                            {new Date(commit.commit.author.date).toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </ScrollArea>

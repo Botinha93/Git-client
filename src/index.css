@@ -18,8 +18,14 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
   body {
-    @apply bg-slate-100 text-slate-700 font-sans;
+    @apply min-h-screen bg-slate-100 text-slate-700 font-sans;
   }
 }
 
@@ -172,7 +178,10 @@
     @apply bg-background text-foreground;
     }
   html {
-    @apply font-sans;
+    @apply font-sans antialiased;
+    }
+  #root {
+    @apply min-h-full;
     }
 }
 

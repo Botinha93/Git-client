@@ -8,5 +8,59 @@
       "createdAt": "2026-04-17T16:18:34.635Z"
     }
   ],
-  "reports": []
+  "reports": [
+    {
+      "id": "report_bb7deb8fb53a29451440",
+      "userId": "enduser_8f9fae7b8a4ca7d92e88",
+      "userEmail": "botinha93@hotmail.com",
+      "userName": "teste",
+      "sourceLanguage": "pt-BR",
+      "title": "Teste",
+      "description": "Teste",
+      "repositoryOwner": "botinha93",
+      "repositoryName": "Chrome-zap-extension",
+      "status": "triaged",
+      "messages": [
+        {
+          "id": "message_ac2d5e5762ace6e72b29",
+          "authorType": "developer",
+          "authorId": "botinha93",
+          "authorName": "botinha93",
+          "body": "Send me logs you dumby",
+          "createdAt": "2026-04-17T19:32:15.063Z"
+        }
+      ],
+      "attachments": [],
+      "progress": [
+        {
+          "id": "progress_37a291005bd6a47dd5d0",
+          "createdAt": "2026-04-17T19:25:03.828Z",
+          "status": "submitted",
+          "note": "Issue report submitted by user.",
+          "actorType": "user",
+          "actorName": "teste"
+        },
+        {
+          "id": "progress_3619eaf240767269622c",
+          "createdAt": "2026-04-17T19:30:18.541Z",
+          "status": "triaged",
+          "note": "Status updated to triaged.",
+          "actorType": "developer",
+          "actorName": "botinha93"
+        },
+        {
+          "id": "progress_7b8b674228885551c8bb",
+          "createdAt": "2026-04-17T19:32:15.063Z",
+          "status": "triaged",
+          "note": "Developer sent a response.",
+          "actorType": "developer",
+          "actorName": "botinha93"
+        }
+      ],
+      "createdAt": "2026-04-17T19:25:03.828Z",
+      "updatedAt": "2026-04-17T19:32:15.063Z",
+      "translatedTitle": "",
+      "translatedDescription": ""
+    }
+  ]
 }

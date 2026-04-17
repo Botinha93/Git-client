@@ -2,7 +2,7 @@ import { ContentType, giteaApi } from 'gitea-js';
 
 export interface GiteaConfig {
   baseUrl: string;
-  token: string;
+  token?: string;
 }
 
 export interface Repository {
@@ -834,7 +834,6 @@ export class GiteaService {
 
     const proxyHeaders = new Headers();
     proxyHeaders.set('x-target-url', targetUrl);
-    proxyHeaders.set('x-gitea-token', this.config.token);
     proxyHeaders.set('x-proxy-method', method);
 
     if (isFormData) {
@@ -854,6 +853,7 @@ export class GiteaService {
     return fetch('/api/proxy', {
       method: 'POST',
       headers: proxyHeaders,
+      credentials: 'same-origin',
       body: ['GET', 'HEAD'].includes(method) ? undefined : body,
     });
   };
