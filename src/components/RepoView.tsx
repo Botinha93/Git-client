@@ -35,7 +35,8 @@ import {
   BookOpen,
   Tag,
   ExternalLink,
-  XCircle
+  XCircle,
+  Download
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -61,6 +62,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from '@/lib/utils';
@@ -222,7 +225,7 @@ export function RepoView({ gitea }: RepoViewProps) {
   const [fileContent, setFileContent] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedTarget, setCopiedTarget] = useState<'https' | 'ssh' | null>(null);
   const [isCreateFileOpen, setIsCreateFileOpen] = useState(false);
   const [isGoToFileOpen, setIsGoToFileOpen] = useState(false);
   const [isForkDialogOpen, setIsForkDialogOpen] = useState(false);
@@ -240,6 +243,7 @@ export function RepoView({ gitea }: RepoViewProps) {
   const [engagementSaving, setEngagementSaving] = useState<'star' | 'watch' | null>(null);
   const [forkOrganization, setForkOrganization] = useState('');
   const [forkName, setForkName] = useState('');
+  const [activeTab, setActiveTab] = useState('code');
 
   useEffect(() => {
     if (owner && repoName) {
@@ -382,9 +386,14 @@ export function RepoView({ gitea }: RepoViewProps) {
     setReadmeContent('');
   };
 
-  const filteredContents = contents.filter(item => 
-    item.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredContents = contents
+    .filter((item) => item.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === 'dir' ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
 
   const filteredCommits = commits.filter(commit => {
     const query = commitSearchQuery.toLowerCase();
@@ -509,12 +518,18 @@ export function RepoView({ gitea }: RepoViewProps) {
     }
   };
 
-  const copyCloneUrl = () => {
-    if (repository) {
-      navigator.clipboard.writeText(repository.clone_url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+  const copyToClipboard = (value: string, target: 'https' | 'ssh') => {
+    navigator.clipboard.writeText(value);
+    setCopiedTarget(target);
+    setTimeout(() => setCopiedTarget(null), 2000);
+  };
+
+  const openWithProtocol = (url: string) => {
+    window.location.href = url;
+  };
+
+  const openExternalUrl = (url: string) => {
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const handleToggleStar = async () => {
@@ -720,19 +735,81 @@ export function RepoView({ gitea }: RepoViewProps) {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          <Button 
-            onClick={copyCloneUrl}
-            size="sm"
-            className="h-8 bg-slate-900 text-white hover:bg-slate-800"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 mr-2" /> : <Copy className="w-3.5 h-3.5 mr-2" />}
-            Code
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  size="sm"
+                  className="h-8 bg-slate-900 text-white hover:bg-slate-800"
+                >
+                  {copiedTarget ? <Check className="w-3.5 h-3.5 mr-2" /> : <Copy className="w-3.5 h-3.5 mr-2" />}
+                  Code
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" className="w-[340px] bg-white">
+              <div className="px-2 py-1 text-xs font-medium text-slate-500">Clone repository</div>
+
+              <div className="px-2 py-1.5 space-y-2">
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-2 space-y-1">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">HTTPS</div>
+                  <div className="font-mono text-[10px] text-slate-600 break-all">{repository.clone_url}</div>
+                </div>
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-2 space-y-1">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">SSH</div>
+                  <div className="font-mono text-[10px] text-slate-600 break-all">{repository.ssh_url}</div>
+                </div>
+              </div>
+
+              <DropdownMenuItem onClick={() => copyToClipboard(repository.clone_url, 'https')}>
+                {copiedTarget === 'https' ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                Copy HTTPS URL
+                <DropdownMenuShortcut>HTTPS</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => copyToClipboard(repository.ssh_url, 'ssh')}>
+                {copiedTarget === 'ssh' ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                Copy SSH URL
+                <DropdownMenuShortcut>SSH</DropdownMenuShortcut>
+              </DropdownMenuItem>
+
+              <DropdownMenuSeparator />
+              <div className="px-2 py-1 text-xs font-medium text-slate-500">Open in IDE</div>
+              <DropdownMenuItem onClick={() => openWithProtocol(`vscode://vscode.git/clone?url=${encodeURIComponent(repository.clone_url)}`)}>
+                <ExternalLink className="w-4 h-4" />
+                Open with VS Code
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openWithProtocol(`vscodium://vscode.git/clone?url=${encodeURIComponent(repository.clone_url)}`)}>
+                <ExternalLink className="w-4 h-4" />
+                Open with VSCodium
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => openWithProtocol(`jetbrains://idea/checkout/git?checkout.repo=${encodeURIComponent(repository.clone_url)}&checkout.branch=${encodeURIComponent(currentBranch || repository.default_branch)}`)}
+              >
+                <ExternalLink className="w-4 h-4" />
+                Open with IntelliJ IDEA
+              </DropdownMenuItem>
+
+              <DropdownMenuSeparator />
+              <div className="px-2 py-1 text-xs font-medium text-slate-500">Download</div>
+              <DropdownMenuItem onClick={() => openExternalUrl(`${repository.html_url.replace(/\/$/, '')}/archive/${encodeURIComponent(currentBranch || repository.default_branch)}.zip`)}>
+                <Download className="w-4 h-4" />
+                Download .zip
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openExternalUrl(`${repository.html_url.replace(/\/$/, '')}/archive/${encodeURIComponent(currentBranch || repository.default_branch)}.tar.gz`)}>
+                <Download className="w-4 h-4" />
+                Download .tar.gz
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openExternalUrl(`${repository.html_url.replace(/\/$/, '')}/archive/${encodeURIComponent(currentBranch || repository.default_branch)}.bundle`)}>
+                <Download className="w-4 h-4" />
+                Download .bundle
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
-      <Tabs defaultValue="code" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
-        <div className="bg-white px-8 border-b border-slate-200">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
+        <div className="border-b border-slate-200 px-8 bg-white shrink-0">
           <TabsList className="bg-transparent h-12 p-0 gap-8">
             <TabsTrigger value="code" className="rounded-none border-b-2 border-transparent data-[state=active]:border-sky-400 data-[state=active]:bg-transparent font-bold text-xs uppercase tracking-widest h-full px-0">
               <LayoutIcon className="w-3.5 h-3.5 mr-2" /> Code
@@ -1119,7 +1196,7 @@ export function RepoView({ gitea }: RepoViewProps) {
         </TabsContent>
 
         <TabsContent value="activity" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
-          {owner && repoName && (
+          {activeTab === 'activity' && owner && repoName && (
             <RepositoryActivityView
               gitea={gitea}
               owner={owner}
@@ -1129,7 +1206,7 @@ export function RepoView({ gitea }: RepoViewProps) {
         </TabsContent>
 
         <TabsContent value="insights" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
-          {owner && repoName && (
+          {activeTab === 'insights' && owner && repoName && (
             <RepositoryInsightsView
               gitea={gitea}
               owner={owner}
@@ -1140,7 +1217,7 @@ export function RepoView({ gitea }: RepoViewProps) {
         </TabsContent>
 
         <TabsContent value="settings" className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden m-0">
-          {owner && repoName && (
+          {activeTab === 'settings' && owner && repoName && (
             <RepositorySettingsView
               gitea={gitea}
               owner={owner}

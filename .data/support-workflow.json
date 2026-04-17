@@ -1,0 +1,12 @@
+{
+  "users": [
+    {
+      "id": "enduser_8f9fae7b8a4ca7d92e88",
+      "email": "botinha93@hotmail.com",
+      "name": "teste",
+      "passwordHash": "3ce36ae40f9046f2df2e2ca62416ceae75208a1512f8d768ba3a5248be144cdf",
+      "createdAt": "2026-04-17T16:18:34.635Z"
+    }
+  ],
+  "reports": []
+}

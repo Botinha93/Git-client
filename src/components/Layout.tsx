@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Repository } from '@/src/lib/gitea';
 import { 
+  Activity,
   Book, 
   ChevronRight, 
   Compass,
@@ -13,6 +14,7 @@ import {
   GitBranch, 
   History, 
   Layout as LayoutIcon, 
+  MessageSquare,
   LogOut, 
   Package,
   Search, 
@@ -75,6 +77,30 @@ export function Layout({ children, repositories, onLogout, user }: LayoutProps) 
             >
               <Compass className="w-4 h-4 opacity-70" />
               <span>Explore</span>
+            </Link>
+            <Link
+              to="/activities"
+              className={cn(
+                "flex items-center gap-3 px-6 py-3 text-sm transition-colors relative",
+                location.pathname === '/activities'
+                  ? "bg-slate-700 text-slate-50 border-l-4 border-sky-400"
+                  : "hover:bg-slate-800 hover:text-slate-50"
+              )}
+            >
+              <Activity className="w-4 h-4 opacity-70" />
+              <span>Activities</span>
+            </Link>
+            <Link
+              to="/support/inbox"
+              className={cn(
+                "flex items-center gap-3 px-6 py-3 text-sm transition-colors relative",
+                location.pathname === '/support/inbox'
+                  ? "bg-slate-700 text-slate-50 border-l-4 border-sky-400"
+                  : "hover:bg-slate-800 hover:text-slate-50"
+              )}
+            >
+              <MessageSquare className="w-4 h-4 opacity-70" />
+              <span>Support Inbox</span>
             </Link>
             <Link
               to="/account"

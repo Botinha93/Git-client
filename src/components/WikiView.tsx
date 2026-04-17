@@ -11,6 +11,7 @@ interface WikiViewProps {
   gitea: GiteaService;
   owner: string;
   repo: string;
+  enabled?: boolean;
 }
 
 function decodeBase64(content: string) {
@@ -25,7 +26,7 @@ function pageContent(page: WikiPage | null) {
   return page.content || '';
 }
 
-export function WikiView({ gitea, owner, repo }: WikiViewProps) {
+export function WikiView({ gitea, owner, repo, enabled = true }: WikiViewProps) {
   const [pages, setPages] = useState<WikiPageMeta[]>([]);
   const [selectedPage, setSelectedPage] = useState<WikiPage | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -37,8 +38,14 @@ export function WikiView({ gitea, owner, repo }: WikiViewProps) {
   const [message, setMessage] = useState('');
 
   useEffect(() => {
+    if (!enabled) {
+      setPages([]);
+      setSelectedPage(null);
+      setLoading(false);
+      return;
+    }
     loadPages();
-  }, [owner, repo]);
+  }, [owner, repo, enabled]);
 
   const loadPages = async () => {
     setLoading(true);

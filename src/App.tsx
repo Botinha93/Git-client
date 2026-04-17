@@ -9,6 +9,9 @@ import { GiteaService, GiteaConfig, GiteaUser, Repository } from './lib/gitea';
 import { Auth } from './components/Auth';
 import { Layout } from './components/Layout';
 import { RepoView } from './components/RepoView';
+import { ActivitiesView } from './components/ActivitiesView';
+import { EndUserPortalView } from './components/EndUserPortalView';
+import { SupportInboxView } from './components/SupportInboxView';
 import { Dashboard } from './components/Dashboard';
 import { ExploreView } from './components/ExploreView';
 import { AccountView } from './components/AccountView';
@@ -81,52 +84,58 @@ export default function App() {
     );
   }
 
-  if (!config) {
-    return <Auth onLogin={handleLogin} />;
-  }
-
   return (
     <Router>
-      <Layout repositories={repositories} onLogout={handleLogout} user={user}>
+      {!config ? (
         <Routes>
-          <Route path="/" element={
-            <Dashboard
-              gitea={gitea!}
-              user={user}
-              repositories={repositories}
-              onRepositoryCreated={handleRepositoryCreated}
-            />
-          } />
-          <Route path="/repo/:owner/:repo" element={<RepoView gitea={gitea!} />} />
-          <Route path="/explore" element={<ExploreView gitea={gitea!} />} />
-          <Route path="/packages" element={
-            user ? (
-              <PackagesView gitea={gitea!} user={user} />
-            ) : (
-              <Navigate to="/" />
-            )
-          } />
-          <Route path="/admin" element={
-            user?.is_admin ? (
-              <AdminView gitea={gitea!} />
-            ) : (
-              <Navigate to="/" />
-            )
-          } />
-          <Route path="/account" element={
-            user ? (
-              <AccountView
+          <Route path="/portal" element={<EndUserPortalView />} />
+          <Route path="*" element={<Auth onLogin={handleLogin} />} />
+        </Routes>
+      ) : (
+        <Layout repositories={repositories} onLogout={handleLogout} user={user}>
+          <Routes>
+            <Route path="/" element={
+              <Dashboard
                 gitea={gitea!}
                 user={user}
-                onUserUpdate={setUser}
+                repositories={repositories}
+                onRepositoryCreated={handleRepositoryCreated}
               />
-            ) : (
-              <Navigate to="/" />
-            )
-          } />
-          <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
-      </Layout>
+            } />
+            <Route path="/portal" element={<EndUserPortalView />} />
+            <Route path="/activities" element={<ActivitiesView gitea={gitea!} repositories={repositories} />} />
+            <Route path="/support/inbox" element={<SupportInboxView giteaBaseUrl={config.baseUrl} giteaToken={config.token} />} />
+            <Route path="/repo/:owner/:repo" element={<RepoView gitea={gitea!} />} />
+            <Route path="/explore" element={<ExploreView gitea={gitea!} />} />
+            <Route path="/packages" element={
+              user ? (
+                <PackagesView gitea={gitea!} user={user} />
+              ) : (
+                <Navigate to="/" />
+              )
+            } />
+            <Route path="/admin" element={
+              user?.is_admin ? (
+                <AdminView gitea={gitea!} />
+              ) : (
+                <Navigate to="/" />
+              )
+            } />
+            <Route path="/account" element={
+              user ? (
+                <AccountView
+                  gitea={gitea!}
+                  user={user}
+                  onUserUpdate={setUser}
+                />
+              ) : (
+                <Navigate to="/" />
+              )
+            } />
+            <Route path="*" element={<Navigate to="/" />} />
+          </Routes>
+        </Layout>
+      )}
     </Router>
   );
 }

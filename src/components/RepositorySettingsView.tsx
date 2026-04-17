@@ -24,7 +24,7 @@ import {
   Webhook,
   Workflow,
 } from 'lucide-react';
-import { ActionArtifact, ActionSecret, ActionVariable, ActionWorkflow, AdminActionRun, AdminActionRunner, Branch, BranchProtection, Collaborator, DeployKey, GiteaService, Hook, PushMirror, Repository } from '@/src/lib/gitea';
+import { ActionArtifact, ActionSecret, ActionVariable, ActionWorkflow, AdminActionRun, AdminActionRunner, Branch, BranchProtection, Collaborator, DeployKey, GiteaService, Hook, Label, PushMirror, Repository, RepositoryProject } from '@/src/lib/gitea';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -47,6 +47,14 @@ interface RepositorySettingsViewProps {
 }
 
 type Permission = 'read' | 'write' | 'admin';
+
+const DEFAULT_REPOSITORY_LABELS = [
+  { name: 'bug', color: 'd73a4a', description: 'Something is not working' },
+  { name: 'enhancement', color: 'a2eeef', description: 'New feature or request' },
+  { name: 'documentation', color: '0075ca', description: 'Documentation improvements' },
+  { name: 'question', color: 'd876e3', description: 'Further information is requested' },
+  { name: 'help wanted', color: '008672', description: 'Extra attention is needed' },
+];
 
 function protectionBranchName(protection: BranchProtection) {
   return protection.branch_name || protection.protected_branch_name || '';
@@ -72,6 +80,8 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const [actionWorkflows, setActionWorkflows] = useState<ActionWorkflow[]>([]);
   const [actionRunners, setActionRunners] = useState<AdminActionRunner[]>([]);
   const [actionTasks, setActionTasks] = useState<AdminActionRun[]>([]);
+  const [repoProjects, setRepoProjects] = useState<RepositoryProject[]>([]);
+  const [repoLabels, setRepoLabels] = useState<Label[]>([]);
   const [runnerRegistrationToken, setRunnerRegistrationToken] = useState('');
   const [topics, setTopics] = useState<string[]>(repository.topics || []);
   const [description, setDescription] = useState(repository.description || '');
@@ -81,6 +91,7 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const [isArchived, setIsArchived] = useState(!!repository.archived);
   const [hasIssues, setHasIssues] = useState(repository.has_issues ?? true);
   const [hasWiki, setHasWiki] = useState(repository.has_wiki ?? true);
+  const [hasProjects, setHasProjects] = useState(repository.has_projects ?? true);
   const [hasPullRequests, setHasPullRequests] = useState(repository.has_pull_requests ?? true);
   const [newBranchName, setNewBranchName] = useState('');
   const [sourceBranch, setSourceBranch] = useState(repository.default_branch);
@@ -113,8 +124,15 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const [secretValue, setSecretValue] = useState('');
   const [secretDescription, setSecretDescription] = useState('');
   const [workflowDispatchRef, setWorkflowDispatchRef] = useState(repository.default_branch);
+  const [projectTitle, setProjectTitle] = useState('');
+  const [projectDescription, setProjectDescription] = useState('');
+  const [labelName, setLabelName] = useState('');
+  const [labelColor, setLabelColor] = useState('ededed');
+  const [labelDescription, setLabelDescription] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [projectsSupported, setProjectsSupported] = useState(true);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
 
   useEffect(() => {
     setDescription(repository.description || '');
@@ -124,6 +142,7 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
     setIsArchived(!!repository.archived);
     setHasIssues(repository.has_issues ?? true);
     setHasWiki(repository.has_wiki ?? true);
+    setHasProjects(repository.has_projects ?? true);
     setHasPullRequests(repository.has_pull_requests ?? true);
     setTopics(repository.topics || []);
     setSourceBranch(repository.default_branch);
@@ -139,7 +158,7 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
   const loadSettingsData = async () => {
     setLoading(true);
     try {
-      const [branchData, collaboratorData, hookData, deployKeyData, pushMirrorData, protectionData, topicData, variableData, secretData, artifactData, workflowData, runnerData, taskData] = await Promise.all([
+      const results = await Promise.allSettled([
         gitea.getBranches(owner, repo),
         gitea.getCollaborators(owner, repo),
         gitea.getRepositoryHooks(owner, repo),
@@ -154,6 +173,26 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
         gitea.getRepositoryActionRunners(owner, repo),
         gitea.getRepositoryActionTasks(owner, repo, { limit: 50 }),
       ]);
+
+      const readSettled = <T,>(index: number, fallback: T): T => {
+        const result = results[index];
+        return result.status === 'fulfilled' ? (result.value as T) : fallback;
+      };
+
+      const branchData = readSettled<Branch[]>(0, []);
+      const collaboratorData = readSettled<Collaborator[]>(1, []);
+      const hookData = readSettled<Hook[]>(2, []);
+      const deployKeyData = readSettled<DeployKey[]>(3, []);
+      const pushMirrorData = readSettled<PushMirror[]>(4, []);
+      const protectionData = readSettled<BranchProtection[]>(5, []);
+      const topicData = readSettled<{ topics?: string[] }>(6, { topics: [] });
+      const variableData = readSettled<ActionVariable[]>(7, []);
+      const secretData = readSettled<ActionSecret[]>(8, []);
+      const artifactData = readSettled<{ artifacts?: ActionArtifact[] }>(9, { artifacts: [] });
+      const workflowData = readSettled<{ workflows?: ActionWorkflow[] }>(10, { workflows: [] });
+      const runnerData = readSettled<{ runners?: AdminActionRunner[] }>(11, { runners: [] });
+      const taskData = readSettled<{ workflow_runs?: AdminActionRun[] }>(12, { workflow_runs: [] });
+
       setBranches(branchData);
       setCollaborators(collaboratorData);
       setHooks(hookData);
@@ -169,6 +208,27 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
       setActionTasks(taskData.workflow_runs || []);
       setSourceBranch((current) => current || branchData[0]?.name || repository.default_branch);
       setProtectionBranch((current) => current || repository.default_branch || branchData[0]?.name || '');
+
+      try {
+        const [projectsAvailable, labels] = await Promise.all([
+          gitea.isProjectsSupported(),
+          gitea.getRepositoryLabels(owner, repo),
+        ]);
+        setProjectsSupported(projectsAvailable);
+        if (!projectsAvailable) {
+          setProjectsError('Projects are not supported by this Gitea instance.');
+          setRepoProjects([]);
+        } else if (repository.has_projects ?? true) {
+          const projects = await gitea.getRepositoryProjects(owner, repo);
+          setRepoProjects(projects);
+          setProjectsError(null);
+        }
+        setRepoLabels(labels);
+      } catch (error: any) {
+        console.error('Failed to load repository projects or labels:', error);
+        setRepoProjects([]);
+        setRepoLabels([]);
+      }
     } catch (error) {
       console.error('Failed to load repository settings data:', error);
     } finally {
@@ -188,6 +248,7 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
         archived: isArchived,
         has_issues: hasIssues,
         has_wiki: hasWiki,
+        has_projects: hasProjects,
         has_pull_requests: hasPullRequests,
         default_branch: defaultBranch,
       });
@@ -555,6 +616,101 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
     }
   };
 
+  const handleCreateProjectBoard = async () => {
+    if (!projectTitle.trim()) return;
+    setSaving(true);
+    setProjectsError(null);
+    try {
+      const project = await gitea.createRepositoryProject(owner, repo, {
+        title: projectTitle.trim(),
+        description: projectDescription.trim() || undefined,
+        board_type: 'kanban',
+      });
+
+      const defaultColumns = ['To do', 'In progress', 'Done'];
+      await Promise.all(defaultColumns.map(async (title) => {
+        try {
+          await gitea.createProjectColumn(project.id, { title });
+        } catch (error) {
+          console.error(`Failed to create default column ${title}:`, error);
+        }
+      }));
+
+      const projects = await gitea.getRepositoryProjects(owner, repo);
+      setRepoProjects(projects);
+      setProjectTitle('');
+      setProjectDescription('');
+    } catch (error: any) {
+      console.error('Failed to create repository project board:', error);
+      const errorMsg = error.message || 'Failed to create project board';
+      setProjectsError(errorMsg);
+      if (errorMsg.includes('not supported')) {
+        setProjectsSupported(false);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteProjectBoard = async (id: number) => {
+    setSaving(true);
+    try {
+      await gitea.deleteRepositoryProject(owner, repo, id);
+      setRepoProjects(repoProjects.filter((project) => project.id !== id));
+    } catch (error) {
+      console.error('Failed to delete repository project board:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreateLabel = async () => {
+    if (!labelName.trim() || !labelColor.trim()) return;
+    setSaving(true);
+    try {
+      const color = labelColor.trim().replace(/^#/, '');
+      const label = await gitea.createRepositoryLabel(owner, repo, {
+        name: labelName.trim(),
+        color,
+        description: labelDescription.trim() || undefined,
+      });
+      setRepoLabels([...repoLabels, label]);
+      setLabelName('');
+      setLabelDescription('');
+    } catch (error) {
+      console.error('Failed to create repository label:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteLabel = async (id: number) => {
+    setSaving(true);
+    try {
+      await gitea.deleteRepositoryLabel(owner, repo, id);
+      setRepoLabels(repoLabels.filter((label) => label.id !== id));
+    } catch (error) {
+      console.error('Failed to delete repository label:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleInitializeDefaultLabels = async () => {
+    setSaving(true);
+    try {
+      const existingNames = new Set(repoLabels.map((label) => label.name.trim().toLowerCase()));
+      const missing = DEFAULT_REPOSITORY_LABELS.filter((label) => !existingNames.has(label.name.toLowerCase()));
+      await Promise.all(missing.map((label) => gitea.createRepositoryLabel(owner, repo, label)));
+      const labels = await gitea.getRepositoryLabels(owner, repo);
+      setRepoLabels(labels);
+    } catch (error) {
+      console.error('Failed to initialize default labels:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleToggleWorkflow = async (workflow: ActionWorkflow) => {
     setSaving(true);
     try {
@@ -750,8 +906,127 @@ export function RepositorySettingsView({ gitea, owner, repo, repository, onRepos
               {toggleButton(isPrivate, () => setIsPrivate(!isPrivate), <Lock className="w-3.5 h-3.5 mr-2" />, 'Private')}
               {toggleButton(isArchived, () => setIsArchived(!isArchived), <Archive className="w-3.5 h-3.5 mr-2" />, 'Archived')}
               {toggleButton(hasIssues, () => setHasIssues(!hasIssues), <Globe className="w-3.5 h-3.5 mr-2" />, 'Issues')}
+              {toggleButton(hasProjects, () => setHasProjects(!hasProjects), <Workflow className="w-3.5 h-3.5 mr-2" />, 'Projects')}
               {toggleButton(hasPullRequests, () => setHasPullRequests(!hasPullRequests), <GitBranch className="w-3.5 h-3.5 mr-2" />, 'Pull Requests')}
               {toggleButton(hasWiki, () => setHasWiki(!hasWiki), <Shield className="w-3.5 h-3.5 mr-2" />, 'Wiki')}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-[1fr_360px] gap-8">
+          <div className="space-y-8">
+            {projectsSupported !== false && (
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+                <Workflow className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Projects / Kanban boards</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {repoProjects.map((project) => (
+                  <div key={project.id} className="px-5 py-4 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-slate-900 truncate">{project.title}</span>
+                        <Badge variant="outline" className="border-slate-200 text-slate-500 text-[10px] uppercase">{project.board_type || 'project'}</Badge>
+                      </div>
+                      <div className="text-xs text-slate-400 truncate">{project.description || 'No description'}</div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={saving}
+                      onClick={() => handleDeleteProjectBoard(project.id)}
+                      className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                ))}
+                {repoProjects.length === 0 && (
+                  <div className="p-8 text-center text-sm text-slate-400">No project boards configured</div>
+                )}
+              </div>
+            </div>
+            )}
+
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Tag className="w-4 h-4 text-slate-500" />
+                  <span className="text-sm font-bold text-slate-900">Labels</span>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleInitializeDefaultLabels} disabled={saving} className="h-8 border-slate-200 text-slate-700">
+                  Initialize default labels
+                </Button>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {repoLabels.map((label) => (
+                  <div key={label.id} className="px-5 py-4 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="h-3 w-3 rounded-full border border-slate-200" style={{ backgroundColor: `#${label.color.replace(/^#/, '')}` }} />
+                        <span className="text-sm font-bold text-slate-900 truncate">{label.name}</span>
+                      </div>
+                      <div className="text-xs text-slate-400 truncate">{label.description || 'No description'}</div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={saving}
+                      onClick={() => handleDeleteLabel(label.id)}
+                      className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                ))}
+                {repoLabels.length === 0 && (
+                  <div className="p-8 text-center text-sm text-slate-400">No labels configured</div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {projectsSupported === false ? (
+              <div className="bg-white border border-orange-200 rounded-xl shadow-sm p-5 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Workflow className="w-4 h-4 text-orange-600" />
+                  <span className="text-sm font-bold text-orange-900">Projects not supported</span>
+                </div>
+                <p className="text-xs text-orange-700">{projectsError || 'Projects / Kanban boards are not supported by this Gitea instance.'}</p>
+              </div>
+            ) : (
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4 h-fit">
+              <div className="flex items-center gap-2">
+                <Plus className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Create project board</span>
+              </div>
+              {projectsError && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                  <p className="text-xs text-red-700">{projectsError}</p>
+                </div>
+              )}
+              <Input value={projectTitle} onChange={(event) => setProjectTitle(event.target.value)} placeholder="Roadmap" className="h-10 border-slate-200" disabled={!projectsSupported} />
+              <Input value={projectDescription} onChange={(event) => setProjectDescription(event.target.value)} placeholder="Description" className="h-10 border-slate-200" disabled={!projectsSupported} />
+              <div className="text-xs text-slate-400">New boards are initialized with To do, In progress, and Done columns.</div>
+              <Button onClick={handleCreateProjectBoard} disabled={!projectTitle.trim() || saving || !projectsSupported} className="w-full bg-sky-600 text-white hover:bg-sky-700">
+                <Workflow className="w-3.5 h-3.5 mr-2" /> Create Kanban Board
+              </Button>
+            </div>
+            )}
+
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4 h-fit">
+              <div className="flex items-center gap-2">
+                <Tag className="w-4 h-4 text-slate-500" />
+                <span className="text-sm font-bold text-slate-900">Create label</span>
+              </div>
+              <Input value={labelName} onChange={(event) => setLabelName(event.target.value)} placeholder="bug" className="h-10 border-slate-200" />
+              <Input value={labelColor} onChange={(event) => setLabelColor(event.target.value)} placeholder="d73a4a" className="h-10 border-slate-200 font-mono text-xs" />
+              <Input value={labelDescription} onChange={(event) => setLabelDescription(event.target.value)} placeholder="Description" className="h-10 border-slate-200" />
+              <Button onClick={handleCreateLabel} disabled={!labelName.trim() || !labelColor.trim() || saving} className="w-full bg-sky-600 text-white hover:bg-sky-700">
+                <Plus className="w-3.5 h-3.5 mr-2" /> Create Label
+              </Button>
             </div>
           </div>
         </div>

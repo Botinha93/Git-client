@@ -1,4 +1,4 @@
-import axios from 'axios';
+import { ContentType, giteaApi } from 'gitea-js';
 
 export interface GiteaConfig {
   baseUrl: string;
@@ -22,6 +22,7 @@ export interface Repository {
   archived?: boolean;
   has_issues?: boolean;
   has_wiki?: boolean;
+  has_projects?: boolean;
   has_pull_requests?: boolean;
   topics?: string[];
   default_branch: string;
@@ -452,6 +453,26 @@ export interface Label {
   description?: string;
 }
 
+export interface RepositoryProject {
+  id: number;
+  title: string;
+  description?: string;
+  state?: string;
+  board_type?: string;
+  columns?: ProjectColumn[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ProjectColumn {
+  id: number;
+  title: string;
+  cards?: {
+    id: number;
+    note?: string;
+  }[];
+}
+
 export interface GiteaUser {
   id: number;
   login: string;
@@ -781,63 +802,167 @@ export interface TrackedTime {
 
 export class GiteaService {
   private config: GiteaConfig;
+  public readonly client: ReturnType<typeof giteaApi>;
+  private swaggerPathSetPromise?: Promise<Set<string> | null>;
+  private starredRepoSetPromise?: Promise<Set<string>>;
+  private starredRepoSetCache?: Set<string>;
 
   constructor(config: GiteaConfig) {
     this.config = config;
+    this.client = giteaApi(this.config.baseUrl.replace(/\/$/, ''), {
+      customFetch: this.proxyFetch,
+    });
+  }
+
+  private proxyFetch: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestInit = init ?? {};
+    const targetUrl = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+    const inputMethod = typeof input === 'string' || input instanceof URL ? undefined : input.method;
+    const method = (requestInit.method || inputMethod || 'GET').toUpperCase();
+    const inputHeaders = typeof input === 'string' || input instanceof URL ? undefined : input.headers;
+    const mergedHeaders = new Headers(inputHeaders);
+    const initHeaders = new Headers(requestInit.headers);
+    initHeaders.forEach((value, key) => mergedHeaders.set(key, value));
+
+    const body = requestInit.body ?? (typeof input === 'string' || input instanceof URL ? undefined : input.body);
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+
+    const proxyHeaders = new Headers();
+    proxyHeaders.set('x-target-url', targetUrl);
+    proxyHeaders.set('x-gitea-token', this.config.token);
+    proxyHeaders.set('x-proxy-method', method);
+
+    if (isFormData) {
+      proxyHeaders.set('x-proxy-body-type', 'form-data');
+    }
+
+    const contentType = mergedHeaders.get('content-type');
+    if (contentType && !isFormData) {
+      proxyHeaders.set('content-type', contentType);
+    }
+
+    const accept = mergedHeaders.get('accept');
+    if (accept) {
+      proxyHeaders.set('accept', accept);
+    }
+
+    return fetch('/api/proxy', {
+      method: 'POST',
+      headers: proxyHeaders,
+      body: ['GET', 'HEAD'].includes(method) ? undefined : body,
+    });
+  };
+
+  private async sdkRequest<T>(requestPromise: Promise<{ data: T }>) {
+    const response = await requestPromise;
+    return response.data;
   }
 
   private async request(method: string, endpoint: string, data?: any, params?: any) {
-    const url = `${this.config.baseUrl}/api/v1${endpoint}`;
-    const response = await axios({
-      method: 'POST', // Always POST to our proxy
-      url: '/api/proxy',
-      data,
-      params,
-      headers: {
-        'x-target-url': url,
-        'x-gitea-token': this.config.token,
-        'x-proxy-method': method,
-      },
-    });
-    return response.data;
+    return this.sdkRequest(this.client.request({
+      path: endpoint,
+      method: method as any,
+      body: data,
+      query: params,
+      type: ContentType.Json,
+      format: 'json',
+      secure: true,
+    }));
   }
 
   private async requestForm(method: string, endpoint: string, formData: FormData, params?: any) {
-    const url = `${this.config.baseUrl}/api/v1${endpoint}`;
-    const response = await axios({
-      method: 'POST',
-      url: '/api/proxy',
-      data: formData,
-      params,
-      headers: {
-        'x-target-url': url,
-        'x-gitea-token': this.config.token,
-        'x-proxy-method': method,
-        'x-proxy-body-type': 'form-data',
-      },
-    });
-    return response.data;
+    return this.sdkRequest(this.client.request({
+      path: endpoint,
+      method: method as any,
+      body: formData,
+      query: params,
+      type: ContentType.FormData,
+      format: 'json',
+      secure: true,
+    }));
   }
 
   private async requestText(method: string, endpoint: string, data?: any, params?: any) {
-    const url = `${this.config.baseUrl}/api/v1${endpoint}`;
-    const response = await axios({
-      method: 'POST',
-      url: '/api/proxy',
-      data,
-      params,
-      responseType: 'text',
-      headers: {
-        'x-target-url': url,
-        'x-gitea-token': this.config.token,
-        'x-proxy-method': method,
-      },
-    });
-    return response.data as string;
+    return this.sdkRequest(this.client.request<string>({
+      path: endpoint,
+      method: method as any,
+      body: data,
+      query: params,
+      format: 'text',
+      secure: true,
+    }));
+  }
+
+  private normalizeEndpointPattern(path: string) {
+    return path
+      .replace(/\{[^}]+\}/g, '{param}')
+      .replace(/\/+/g, '/')
+      .replace(/\/$/, '');
+  }
+
+  private async getSwaggerPathSet() {
+    if (!this.swaggerPathSetPromise) {
+      this.swaggerPathSetPromise = this.proxyFetch(`${this.config.baseUrl.replace(/\/$/, '')}/api/v1/swagger.v1.json`, { method: 'GET' })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`Failed to load swagger: ${response.status}`);
+          }
+          const data = await response.json();
+          const paths = Object.keys(data?.paths || {});
+          return new Set(paths.map((path) => this.normalizeEndpointPattern(path)));
+        })
+        .catch(() => null);
+    }
+
+    return this.swaggerPathSetPromise;
+  }
+
+  private async isEndpointAvailable(pathTemplate: string) {
+    const pathSet = await this.getSwaggerPathSet();
+    if (!pathSet) {
+      // Fail closed for optional/feature-detection calls to avoid noisy unsupported requests.
+      return false;
+    }
+    return pathSet.has(this.normalizeEndpointPattern(pathTemplate));
+  }
+
+  async isProjectsSupported() {
+    return this.isEndpointAvailable('/repos/{owner}/{repo}/projects');
+  }
+
+  private getRepoCacheKey(owner: string, repo: string) {
+    return `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+  }
+
+  private async getStarredRepoSet(forceRefresh = false) {
+    if (!forceRefresh && this.starredRepoSetCache) {
+      return this.starredRepoSetCache;
+    }
+
+    if (forceRefresh || !this.starredRepoSetPromise) {
+      this.starredRepoSetPromise = this.getStarredRepositories()
+        .then((repos) => {
+          const set = new Set(repos.map((repo) => this.getRepoCacheKey(repo.owner.login, repo.name)));
+          this.starredRepoSetCache = set;
+          return set;
+        })
+        .catch(() => {
+          const empty = new Set<string>();
+          this.starredRepoSetCache = empty;
+          return empty;
+        });
+    }
+
+    return this.starredRepoSetPromise;
   }
 
   async getUser() {
-    return this.request('GET', '/user') as Promise<GiteaUser>;
+    return this.sdkRequest(this.client.user.userGetCurrent()) as Promise<GiteaUser>;
   }
 
   async getUserActionVariables(params?: { page?: number; limit?: number }) {
@@ -857,6 +982,9 @@ export class GiteaService {
   }
 
   async getUserActionSecrets(params?: { page?: number; limit?: number }) {
+    if (!(await this.isEndpointAvailable('/user/actions/secrets'))) {
+      return [] as ActionSecret[];
+    }
     return this.request('GET', '/user/actions/secrets', null, params) as Promise<ActionSecret[]>;
   }
 
@@ -1028,27 +1156,48 @@ export class GiteaService {
   }
 
   async getAdminActionJobs(params?: { status?: string; page?: number; limit?: number }) {
+    if (!(await this.isEndpointAvailable('/admin/actions/jobs'))) {
+      return { jobs: [], total_count: 0 } as { jobs: AdminActionJob[]; total_count: number };
+    }
     return this.request('GET', '/admin/actions/jobs', null, params) as Promise<{ jobs: AdminActionJob[]; total_count: number }>;
   }
 
   async getAdminActionRuns(params?: { event?: string; branch?: string; status?: string; actor?: string; head_sha?: string; page?: number; limit?: number }) {
+    if (!(await this.isEndpointAvailable('/admin/actions/runs'))) {
+      return { workflow_runs: [], total_count: 0 } as { workflow_runs: AdminActionRun[]; total_count: number };
+    }
     return this.request('GET', '/admin/actions/runs', null, params) as Promise<{ workflow_runs: AdminActionRun[]; total_count: number }>;
   }
 
   async getAdminActionRunners() {
+    if (!(await this.isEndpointAvailable('/admin/actions/runners'))) {
+      return { runners: [], total_count: 0 } as { runners: AdminActionRunner[]; total_count?: number };
+    }
     return this.request('GET', '/admin/actions/runners') as Promise<{ runners: AdminActionRunner[]; total_count?: number }>;
   }
 
   async getAdminActionRunner(runnerId: string | number) {
+    if (!(await this.isEndpointAvailable('/admin/actions/runners/{runner_id}'))) {
+      throw new Error('Admin action runners endpoint is not supported by this Gitea instance.');
+    }
     return this.request('GET', `/admin/actions/runners/${encodeURIComponent(String(runnerId))}`) as Promise<AdminActionRunner>;
   }
 
   async deleteAdminActionRunner(runnerId: string | number) {
+    if (!(await this.isEndpointAvailable('/admin/actions/runners/{runner_id}'))) {
+      throw new Error('Admin action runners endpoint is not supported by this Gitea instance.');
+    }
     return this.request('DELETE', `/admin/actions/runners/${encodeURIComponent(String(runnerId))}`);
   }
 
   async createAdminActionRunnerRegistrationToken() {
-    return this.request('POST', '/admin/actions/runners/registration-token') as Promise<{ token: string }>;
+    if (await this.isEndpointAvailable('/admin/actions/runners/registration-token')) {
+      return this.request('POST', '/admin/actions/runners/registration-token') as Promise<{ token: string }>;
+    }
+    if (await this.isEndpointAvailable('/admin/runners/registration-token')) {
+      return this.request('POST', '/admin/runners/registration-token') as Promise<{ token: string }>;
+    }
+    throw new Error('Admin runner registration endpoint is not supported by this Gitea instance.');
   }
 
   async updateUserSettings(data: {
@@ -1137,7 +1286,9 @@ export class GiteaService {
   }
 
   async getStarredRepositories() {
-    return this.request('GET', '/user/starred') as Promise<Repository[]>;
+    const repos = await this.request('GET', '/user/starred') as Repository[];
+    this.starredRepoSetCache = new Set(repos.map((repo) => this.getRepoCacheKey(repo.owner.login, repo.name)));
+    return repos;
   }
 
   async getWatchedRepositories() {
@@ -1153,7 +1304,7 @@ export class GiteaService {
   }
 
   async getAccessTokens(username: string) {
-    return this.request('GET', `/users/${encodeURIComponent(username)}/tokens`) as Promise<AccessToken[]>;
+    return this.sdkRequest(this.client.users.userGetTokens(username)) as Promise<AccessToken[]>;
   }
 
   async createAccessToken(username: string, data: { name: string; scopes?: string[] }) {
@@ -1483,7 +1634,7 @@ export class GiteaService {
   }
 
   async getRepository(owner: string, repo: string) {
-    return this.request('GET', `/repos/${owner}/${repo}`) as Promise<Repository>;
+    return this.sdkRequest(this.client.repos.repoGet(owner, repo)) as Promise<Repository>;
   }
 
   async getRepositoryForks(owner: string, repo: string, params?: { page?: number; limit?: number }) {
@@ -1491,7 +1642,9 @@ export class GiteaService {
   }
 
   async getRepositoryContributors(owner: string, repo: string, params?: { page?: number; limit?: number }) {
-    return this.request('GET', `/repos/${owner}/${repo}/contributors`, null, params) as Promise<Contributor[]>;
+    // Gitea 1.23 has no stable contributors endpoint in the OpenAPI spec.
+    // Keep the UI resilient by returning an empty list instead of spamming 404s.
+    return [] as Contributor[];
   }
 
   async getRepositoryLanguages(owner: string, repo: string) {
@@ -1546,6 +1699,57 @@ export class GiteaService {
     return this.request('DELETE', `/repos/${owner}/${repo}/topics/${encodeURIComponent(topic)}`);
   }
 
+  async getRepositoryLabels(owner: string, repo: string) {
+    return this.request('GET', `/repos/${owner}/${repo}/labels`) as Promise<Label[]>;
+  }
+
+  async createRepositoryLabel(owner: string, repo: string, data: { name: string; color: string; description?: string }) {
+    return this.request('POST', `/repos/${owner}/${repo}/labels`, data) as Promise<Label>;
+  }
+
+  async updateRepositoryLabel(owner: string, repo: string, id: number, data: { name?: string; color?: string; description?: string }) {
+    return this.request('PATCH', `/repos/${owner}/${repo}/labels/${id}`, data) as Promise<Label>;
+  }
+
+  async deleteRepositoryLabel(owner: string, repo: string, id: number) {
+    return this.request('DELETE', `/repos/${owner}/${repo}/labels/${id}`);
+  }
+
+  async getRepositoryProjects(owner: string, repo: string) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/projects'))) {
+      return [] as RepositoryProject[];
+    }
+    return this.request('GET', `/repos/${owner}/${repo}/projects`) as Promise<RepositoryProject[]>;
+  }
+
+  async createRepositoryProject(owner: string, repo: string, data: { title: string; description?: string; board_type?: string }) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/projects'))) {
+      throw new Error('Repository projects endpoint is not supported by this Gitea instance.');
+    }
+    return this.request('POST', `/repos/${owner}/${repo}/projects`, data) as Promise<RepositoryProject>;
+  }
+
+  async deleteRepositoryProject(owner: string, repo: string, id: number) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/projects/{id}'))) {
+      throw new Error('Repository projects endpoint is not supported by this Gitea instance.');
+    }
+    return this.request('DELETE', `/repos/${owner}/${repo}/projects/${id}`);
+  }
+
+  async getProjectColumns(id: number) {
+    if (!(await this.isEndpointAvailable('/projects/{id}/columns'))) {
+      return [] as ProjectColumn[];
+    }
+    return this.request('GET', `/projects/${id}/columns`) as Promise<ProjectColumn[]>;
+  }
+
+  async createProjectColumn(id: number, data: { title: string }) {
+    if (!(await this.isEndpointAvailable('/projects/{id}/columns'))) {
+      throw new Error('Project columns endpoint is not supported by this Gitea instance.');
+    }
+    return this.request('POST', `/projects/${id}/columns`, data) as Promise<ProjectColumn>;
+  }
+
   async updateRepository(owner: string, repo: string, data: {
     name?: string;
     description?: string;
@@ -1554,6 +1758,7 @@ export class GiteaService {
     archived?: boolean;
     has_issues?: boolean;
     has_wiki?: boolean;
+    has_projects?: boolean;
     has_pull_requests?: boolean;
     default_branch?: string;
   }) {
@@ -1607,21 +1812,24 @@ export class GiteaService {
   }
 
   async isStarred(owner: string, repo: string) {
-    try {
-      await this.request('GET', `/user/starred/${owner}/${repo}`);
-      return true;
-    } catch (error: any) {
-      if (error.response?.status === 404) return false;
-      throw error;
-    }
+    const starred = await this.getStarredRepoSet();
+    return starred.has(this.getRepoCacheKey(owner, repo));
   }
 
   async starRepository(owner: string, repo: string) {
-    return this.request('PUT', `/user/starred/${owner}/${repo}`);
+    const response = await this.sdkRequest(this.client.user.userCurrentPutStar(owner, repo));
+    const starred = await this.getStarredRepoSet();
+    starred.add(this.getRepoCacheKey(owner, repo));
+    this.starredRepoSetCache = starred;
+    return response;
   }
 
   async unstarRepository(owner: string, repo: string) {
-    return this.request('DELETE', `/user/starred/${owner}/${repo}`);
+    const response = await this.sdkRequest(this.client.user.userCurrentDeleteStar(owner, repo));
+    const starred = await this.getStarredRepoSet();
+    starred.delete(this.getRepoCacheKey(owner, repo));
+    this.starredRepoSetCache = starred;
+    return response;
   }
 
   async isWatching(owner: string, repo: string) {
@@ -1643,15 +1851,34 @@ export class GiteaService {
   }
 
   async getContents(owner: string, repo: string, path: string = '', ref?: string) {
-    return this.request('GET', `/repos/${owner}/${repo}/contents/${path}`, null, { ref }) as Promise<FileContent | FileContent[]>;
+    if (!path) {
+      return this.sdkRequest(this.client.repos.repoGetContentsList(owner, repo, { ref })) as Promise<FileContent[]>;
+    }
+    return this.sdkRequest(this.client.repos.repoGetContents(owner, repo, path, { ref })) as Promise<FileContent | FileContent[]>;
   }
 
   async getBranches(owner: string, repo: string) {
-    return this.request('GET', `/repos/${owner}/${repo}/branches`) as Promise<Branch[]>;
+    const branches = await this.sdkRequest(this.client.repos.repoListBranches(owner, repo));
+    return branches.map((branch: any) => ({
+      ...branch,
+      commit: {
+        id: Number(branch?.commit?.id || 0),
+        sha: String(branch?.commit?.id || branch?.commit?.sha || ''),
+        url: String(branch?.commit?.url || ''),
+      },
+    })) as Branch[];
   }
 
   async getBranch(owner: string, repo: string, branch: string) {
-    return this.request('GET', `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`) as Promise<Branch>;
+    const data: any = await this.sdkRequest(this.client.repos.repoGetBranch(owner, repo, branch));
+    return {
+      ...data,
+      commit: {
+        id: Number(data?.commit?.id || 0),
+        sha: String(data?.commit?.id || data?.commit?.sha || ''),
+        url: String(data?.commit?.url || ''),
+      },
+    } as Branch;
   }
 
   async getGitTree(owner: string, repo: string, sha: string, recursive = true) {
@@ -1704,7 +1931,7 @@ export class GiteaService {
   }
 
   async getCommits(owner: string, repo: string, sha?: string) {
-    return this.request('GET', `/repos/${owner}/${repo}/commits`, null, { sha }) as Promise<Commit[]>;
+    return this.sdkRequest(this.client.repos.repoGetAllCommits(owner, repo, { sha })) as Promise<Commit[]>;
   }
 
   async compareCommits(owner: string, repo: string, base: string, head: string) {
@@ -1910,7 +2137,6 @@ export class GiteaService {
 
   async updatePullRequest(owner: string, repo: string, index: number, data: {
     title?: string;
-    body?: string;
     state?: 'open' | 'closed';
     base?: string;
     assignee?: string;
@@ -1946,7 +2172,7 @@ export class GiteaService {
   }
 
   async updatePullRequestBranch(owner: string, repo: string, index: number, style?: 'merge' | 'rebase') {
-    return this.request('POST', `/repos/${owner}/${repo}/pulls/${index}/update`, {}, { style });
+    return this.request('PUT', `/repos/${owner}/${repo}/pulls/${index}/update`, style ? { style } : {});
   }
 
   async getPullRequestFiles(owner: string, repo: string, index: number) {
@@ -2081,7 +2307,7 @@ export class GiteaService {
   }
 
   async getWikiPages(owner: string, repo: string) {
-    return this.request('GET', `/repos/${owner}/${repo}/wiki/pages`) as Promise<WikiPageMeta[]>;
+    return this.sdkRequest(this.client.repos.repoGetWikiPages(owner, repo)) as Promise<WikiPageMeta[]>;
   }
 
   async getWikiPage(owner: string, repo: string, pageName: string) {
@@ -2208,46 +2434,70 @@ export class GiteaService {
   }
 
   async getRepositoryActionArtifacts(owner: string, repo: string, params?: { name?: string }) {
-    return this.request('GET', `/repos/${owner}/${repo}/actions/artifacts`, null, params) as Promise<{ artifacts: ActionArtifact[]; total_count: number }>;
+    return { artifacts: [], total_count: 0 } as { artifacts: ActionArtifact[]; total_count: number };
   }
 
   async getRepositoryActionArtifact(owner: string, repo: string, artifactId: string | number) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/actions/artifacts/{artifact_id}'))) {
+      throw new Error('Repository action artifacts endpoint is not supported by this Gitea instance.');
+    }
     return this.request('GET', `/repos/${owner}/${repo}/actions/artifacts/${encodeURIComponent(String(artifactId))}`) as Promise<ActionArtifact>;
   }
 
   async getRepositoryActionWorkflows(owner: string, repo: string) {
-    return this.request('GET', `/repos/${owner}/${repo}/actions/workflows`) as Promise<{ workflows: ActionWorkflow[]; total_count: number }>;
+    return { workflows: [], total_count: 0 } as { workflows: ActionWorkflow[]; total_count: number };
   }
 
   async getRepositoryActionWorkflow(owner: string, repo: string, workflowId: string) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/actions/workflows/{workflow_id}'))) {
+      throw new Error('Repository action workflows endpoint is not supported by this Gitea instance.');
+    }
     return this.request('GET', `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}`) as Promise<ActionWorkflow>;
   }
 
   async enableRepositoryActionWorkflow(owner: string, repo: string, workflowId: string) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/actions/workflows/{workflow_id}/enable'))) {
+      throw new Error('Repository action workflows endpoint is not supported by this Gitea instance.');
+    }
     return this.request('PUT', `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}/enable`);
   }
 
   async disableRepositoryActionWorkflow(owner: string, repo: string, workflowId: string) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/actions/workflows/{workflow_id}/disable'))) {
+      throw new Error('Repository action workflows endpoint is not supported by this Gitea instance.');
+    }
     return this.request('PUT', `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}/disable`);
   }
 
   async dispatchRepositoryActionWorkflow(owner: string, repo: string, workflowId: string, data: { ref: string; inputs?: Record<string, string> }) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches'))) {
+      throw new Error('Repository action workflows endpoint is not supported by this Gitea instance.');
+    }
     return this.request('POST', `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}/dispatches`, data);
   }
 
   async getRepositoryActionRunners(owner: string, repo: string) {
-    return this.request('GET', `/repos/${owner}/${repo}/actions/runners`) as Promise<{ runners: AdminActionRunner[]; total_count?: number }>;
+    return { runners: [], total_count: 0 } as { runners: AdminActionRunner[]; total_count?: number };
   }
 
   async getRepositoryActionRunner(owner: string, repo: string, runnerId: string | number) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/actions/runners/{runner_id}'))) {
+      throw new Error('Repository action runners endpoint is not supported by this Gitea instance.');
+    }
     return this.request('GET', `/repos/${owner}/${repo}/actions/runners/${encodeURIComponent(String(runnerId))}`) as Promise<AdminActionRunner>;
   }
 
   async deleteRepositoryActionRunner(owner: string, repo: string, runnerId: string | number) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/actions/runners/{runner_id}'))) {
+      throw new Error('Repository action runners endpoint is not supported by this Gitea instance.');
+    }
     return this.request('DELETE', `/repos/${owner}/${repo}/actions/runners/${encodeURIComponent(String(runnerId))}`);
   }
 
   async createRepositoryActionRunnerRegistrationToken(owner: string, repo: string) {
+    if (!(await this.isEndpointAvailable('/repos/{owner}/{repo}/actions/runners/registration-token'))) {
+      throw new Error('Repository action runners endpoint is not supported by this Gitea instance.');
+    }
     return this.request('POST', `/repos/${owner}/${repo}/actions/runners/registration-token`) as Promise<{ token: string }>;
   }
 
